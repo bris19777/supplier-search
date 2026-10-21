@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>חיפוש ספקים</title>
+<style>
+  :root {
+    --bg: #f4f6f9; --panel: #fff; --ink: #1d2433; --muted: #667085; --line: #e3e7ee;
+    --accent: #1f5eff; --accent-soft: #e8efff; --ok: #12805c; --ok-soft: #e3f6ee;
+    --bad: #b42318; --bad-soft: #fdecea; --warn: #9a6700; --warn-soft: #fff4d6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 16px; position: sticky; top: 0; z-index: 5; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; max-width: 1500px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 0 12px; white-space: nowrap; }
+  #q { flex: 1 1 320px; min-width: 0; font-size: 16px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; }
+  button, select { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: .6; cursor: default; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; }
+  .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  #sites { display: flex; gap: 6px; flex-wrap: wrap; max-width: 1500px; margin: 10px auto 0; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); font-size: 13px; }
+  .chip.ok { border-color: #b7e4cf; background: var(--ok-soft); }
+  .chip.err { border-color: #f5c2bd; background: var(--bad-soft); }
+  .chip.login { border-color: #f1d48a; background: var(--warn-soft); }
+  .chip.off { opacity: .5; }
+  .chip button { padding: 1px 8px; font-size: 12px; }
+  main { display: grid; grid-template-columns: 270px 1fr; gap: 16px; max-width: 1500px; margin: 16px auto; padding: 0 16px; }
+  aside { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; align-self: start; position: sticky; top: 120px; max-height: calc(100vh - 140px); overflow: auto; }
+  aside h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); }
+  aside h3:first-child { margin-top: 0; }
+  aside label { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
+  aside label .n { margin-inline-start: auto; color: var(--muted); font-size: 12px; }
+  aside input[type=number], aside input[type=text] { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  .row2 { display: flex; gap: 6px; }
+  .facet .more { color: var(--accent); background: none; border: 0; padding: 2px 0; font-size: 13px; }
+  #summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; color: var(--muted); }
+  #summary .grow { flex: 1; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .item { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+  .item:last-child { border-bottom: 0; }
+  .item img, .head img, .ph { width: 64px; height: 64px; object-fit: contain; border-radius: 6px; background: #fafbfc; }
+  .title { font-weight: 600; color: var(--ink); text-decoration: none; }
+  .title:hover { color: var(--accent); }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--accent-soft); color: var(--accent); }
+  .in { background: var(--ok-soft); color: var(--ok); }
+  .out { background: var(--bad-soft); color: var(--bad); }
+  .unk { background: #f0f2f5; color: var(--muted); }
+  .price { text-align: left; white-space: nowrap; }
+  .price b { font-size: 18px; }
+  .price small { display: block; color: var(--muted); font-size: 12px; }
+  .group { padding: 12px; margin-bottom: 12px; }
+  .group .head { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: center; }
+  .offers { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+  .offers td { padding: 6px 8px; border-top: 1px solid var(--line); }
+  .offers tr.best td { background: var(--ok-soft); }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #filtersToggle { display: none; }
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; }
+    aside { position: static; max-height: none; display: none; }
+    aside.open { display: block; }
+    #filtersToggle { display: inline-block; }
+    .item { grid-template-columns: 48px 1fr; }
+    .item img, .head img, .ph { width: 48px; height: 48px; }
+    .group .head { grid-template-columns: 48px 1fr; }
+    .group .head .price { grid-column: 2; text-align: right; }
+    .offers td:nth-child(2) { display: none; }
+    .item .price { grid-column: 2; text-align: right; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <form class="bar" id="form">
+    <h1>חיפוש ספקים</h1>
+    <input id="q" type="search" placeholder="שם מוצר, דגם או מק&quot;ט יצרן…" autocomplete="off" autofocus>
+    <button class="primary" type="submit" id="go">חפש</button>
+    <label title="מתעלם מהזיכרון הזמני ומושך מחדש מכל האתרים"><input type="checkbox" id="refresh"> רענון מלא</label>
+    <span class="seg" id="basis"><button type="button" data-v="inc" class="on">כולל מע"מ</button><button type="button" data-v="ex">לפני מע"מ</button></span>
+    <span class="seg" id="view"><button type="button" data-v="list" class="on">רשימה</button><button type="button" data-v="compare">השוואה</button></span>
+    <button type="button" id="filtersToggle">סינון</button>
+  </form>
+  <div id="sites"></div>
+</header>
+
+<main>
+  <aside id="filters">
+    <h3>מחיר (₪)</h3>
+    <div class="row2"><input type="number" id="pmin" placeholder="מ-" min="0"><input type="number" id="pmax" placeholder="עד" min="0"></div>
+    <h3>אפשרויות</h3>
+    <label><input type="checkbox" id="instock"> רק מוצרים במלאי</label>
+    <label><input type="checkbox" id="hasprice"> רק מוצרים עם מחיר</label>
+    <label><input type="checkbox" id="relevant"> רק תוצאות שמכילות את כל מילות החיפוש</label>
+    <h3>חייב להכיל</h3>
+    <input type="text" id="include" placeholder="למשל: nvme">
+    <h3>לא להכיל</h3>
+    <input type="text" id="exclude" placeholder="למשל: מארז">
+    <div id="facets"></div>
+    <p><button type="button" id="clear">ניקוי כל הסינונים</button></p>
+  </aside>
+  <section>
+    <div id="summary"><span class="grow" id="count">הקלד מוצר לחיפוש בכל הספקים במקביל.</span>
+      <select id="sort">
+        <option value="relevance">מיון: רלוונטיות</option>
+        <option value="price_asc">מחיר: מהזול ליקר</option>
+        <option value="price_desc">מחיר: מהיקר לזול</option>
+        <option value="site">לפי ספק</option>
+        <option value="title">לפי שם</option>
+      </select>
+    </div>
+    <div id="results"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const state = { view: "list", basis: "inc", facets: {}, sites: [], disabled: new Set(), expanded: new Set(), lastQuery: "" };
+const nf = new Intl.NumberFormat("he-IL", { maximumFractionDigits: 2 });
+
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function money(v) { return v == null ? "—" : "₪" + nf.format(v); }
+function safeUrl(u) { return /^https?:\/\//i.test(u || "") ? u : "#"; }
+
+function loadPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem("supsearch") || "{}");
+    if (p.basis) state.basis = p.basis;
+    if (p.view) state.view = p.view;
+    (p.disabled || []).forEach(id => state.disabled.add(id));
+  } catch (e) {}
+}
+function savePrefs() {
+  try { localStorage.setItem("supsearch", JSON.stringify({ basis: state.basis, view: state.view, disabled: [...state.disabled] })); } catch (e) {}
+}
+
+function segment(id, key) {
+  const el = $(id);
+  el.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === state[key]));
+  el.addEventListener("click", e => {
+    const v = e.target.dataset.v; if (!v) return;
+    state[key] = v; savePrefs();
+    el.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+    run(false);
+  });
+}
+
+async function loadSites() {
+  const r = await fetch("api/sites");
+  state.sites = await r.json();
+  renderSites(null);
+}
+
+function renderSites(results) {
+  const byId = Object.fromEntries((results || []).map(r => [r.site, r]));
+  $("#sites").innerHTML = state.sites.map(s => {
+    if (!s.enabled) {
+      return `<span class="chip off" title="${esc(s.notes || "")}">${esc(s.name)} · טרם הוגדר${s.fetch === "browser" ? ` <button type="button" data-login="${esc(s.id)}" title="פותח את האתר בחלון גלוי ושומר כל דף שנפתח, כדי להגדיר את האתר">פתח והקלט</button>` : ""}</span>`;
+    }
+    const r = byId[s.id];
+    const off = state.disabled.has(s.id);
+    let cls = "chip" + (off ? " off" : "");
+    let info = "";
+    if (r && !off) {
+      if (r.needs_login) { cls += " login"; info = `${r.count} · לא מחובר, בלי מחירים`; }
+      else if (!r.ok || r.error) { cls += " err"; info = "שגיאה"; }
+      else { cls += " ok"; info = `${r.count} · ${r.elapsed} שנ'${r.cached ? " · זיכרון" : ""}`; }
+    }
+    const title = esc((r && r.error) || s.notes || "");
+    const loginBtn = s.fetch === "browser" ? `<button type="button" data-login="${esc(s.id)}" title="פתיחת חלון דפדפן במחשב השרת להתחברות ידנית">התחברות</button>` : "";
+    return `<span class="${cls}" title="${title}"><label><input type="checkbox" data-site="${esc(s.id)}" ${off ? "" : "checked"}> ${esc(s.name)}</label>${info ? `<span>${esc(info)}</span>` : ""}${loginBtn}</span>`;
+  }).join("");
+}
+
+$("#sites").addEventListener("change", e => {
+  const id = e.target.dataset.site; if (!id) return;
+  e.target.checked ? state.disabled.delete(id) : state.disabled.add(id);
+  savePrefs(); run(false);
+});
+$("#sites").addEventListener("click", async e => {
+  const id = e.target.dataset.login; if (!id) return;
+  const r = await fetch(`api/sites/${encodeURIComponent(id)}/login-window`, { method: "POST" });
+  const j = await r.json();
+  alert(j.message || j.detail || "שגיאה");
+});
+
+function request(refresh) {
+  const num = (id) => { const v = $(id).value.trim(); return v === "" ? null : Number(v); };
+  return {
+    query: $("#q").value.trim(),
+    sites: state.sites.filter(s => s.enabled && !state.disabled.has(s.id)).map(s => s.id),
+    refresh, view: state.view, facets: state.facets,
+    price_min: num("#pmin"), price_max: num("#pmax"),
+    in_stock: $("#instock").checked, has_price: $("#hasprice").checked,
+    include: $("#include").value, exclude: $("#exclude").value,
+    min_relevance: $("#relevant").checked ? 1 : 0,
+    basis: state.basis, sort: $("#sort").value,
+  };
+}
+
+let seq = 0;
+async function run(refresh) {
+  const body = request(refresh);
+  if (!body.query) return;
+  if (!body.sites.length) { $("#results").innerHTML = `<div class="card empty">לא נבחר אף ספק.</div>`; return; }
+  const my = ++seq;
+  const isNew = body.query !== state.lastQuery || refresh;
+  $("#go").disabled = true;
+  $("#count").innerHTML = `<span class="spinner"></span> ${isNew ? "מחפש בכל הספקים…" : "מסנן…"}`;
+  try {
+    const r = await fetch("api/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (my !== seq) return;
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    state.lastQuery = body.query;
+    history.replaceState(null, "", "#q=" + encodeURIComponent(body.query));
+    render(j);
+  } catch (e) {
+    if (my === seq) $("#count").textContent = "שגיאה: " + e.message;
+  } finally {
+    if (my === seq) { $("#go").disabled = false; $("#refresh").checked = false; }
+  }
+}
+
+function priceBlock(p) {
+  const main = state.basis === "ex" ? p.price_ex_vat : p.price_inc_vat;
+  const other = state.basis === "ex" ? p.price_inc_vat : p.price_ex_vat;
+  const orig = p.currency && p.currency !== "ILS" && p.price != null ? `<small>במקור: ${esc(p.currency)} ${nf.format(p.price)}</small>` : "";
+  return `<b>${money(main)}</b>${other != null ? `<small>${state.basis === "ex" ? "כולל" : "לפני"} מע"מ: ${money(other)}</small>` : ""}${orig}`;
+}
+function stockTag(p) {
+  if (p.in_stock === true) return `<span class="tag in">במלאי</span>`;
+  if (p.in_stock === false) return `<span class="tag out">${esc(/^\d*$/.test(p.stock_text || "") ? "לא במלאי" : p.stock_text)}</span>`;
+  return `<span class="tag unk">מלאי לא ידוע</span>`;
+}
+function img(src) { return src ? `<img src="${esc(safeUrl(src))}" loading="lazy" alt="" referrerpolicy="no-referrer">` : `<div class="ph"></div>`; }
+
+function render(j) {
+  renderSites(j.sites);
+  const failed = j.sites.filter(s => s.error && !s.needs_login).length;
+  const guests = j.sites.filter(s => s.needs_login).length;
+  $("#count").textContent = `${j.matched} מתוך ${j.total} תוצאות מ-${j.sites.length} ספקים`
+    + (guests ? ` · ${guests} לא מחוברים (בלי מחירים)` : "")
+    + (failed ? ` · ${failed} עם שגיאה (פרטים במעבר עכבר)` : "");
+  renderFacets(j.facets);
+  if (j.price_range) {
+    $("#pmin").placeholder = "מ-" + Math.floor(j.price_range[0]);
+    $("#pmax").placeholder = "עד " + Math.ceil(j.price_range[1]);
+  }
+  const res = $("#results");
+  if (state.view === "compare") {
+    if (!j.groups.length) { res.innerHTML = `<div class="card empty">אין תוצאות התואמות לסינון.</div>`; return; }
+    res.innerHTML = j.groups.map(g => {
+      const best = state.basis === "ex" ? Math.min(...g.offers.map(o => o.price_ex_vat ?? Infinity)) : g.best_price;
+      return `<div class="card group">
+        <div class="head">${img(g.image)}
+          <div><div class="title">${esc(g.title)}</div>
+            <div class="meta">${g.mpn ? `<span>מק"ט יצרן: ${esc(g.mpn)}</span>` : ""}<span>${g.offers.length} הצעות מ-${g.sites} ספקים</span></div></div>
+          <div class="price"><small>הזול ביותר</small><b>${money(Number.isFinite(best) ? best : null)}</b></div>
+        </div>
+        <table class="offers">${g.offers.map((o, i) => `<tr class="${i === 0 && g.sites > 1 ? "best" : ""}">
+          <td><b>${esc(o.site_name)}</b></td>
+          <td><a class="title" href="${esc(safeUrl(o.url))}" target="_blank" rel="noopener">${esc(o.title)}</a></td>
+          <td>${stockTag(o)}</td><td class="price">${priceBlock(o)}</td></tr>`).join("")}</table>
+      </div>`;
+    }).join("");
+    return;
+  }
+  if (!j.items.length) { res.innerHTML = `<div class="card empty">אין תוצאות התואמות לסינון.</div>`; return; }
+  res.innerHTML = `<div class="card">` + j.items.map(p => `<div class="item">${img(p.image)}
+      <div><a class="title" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">${esc(p.title)}</a>
+        <div class="meta"><span class="tag">${esc(p.site_name)}</span>${stockTag(p)}
+          ${p.brand ? `<span>${esc(p.brand)}</span>` : ""}
+          ${p.mpn ? `<span>מק"ט יצרן: ${esc(p.mpn)}</span>` : ""}
+          ${p.sku ? `<span>מק"ט: ${esc(p.sku)}</span>` : ""}
+          ${p.category ? `<span>${esc(p.category)}</span>` : ""}</div></div>
+      <div class="price">${priceBlock(p)}</div></div>`).join("") + `</div>`;
+}
+
+const FACET_LIMIT = 8;
+function renderFacets(facets) {
+  $("#facets").innerHTML = facets.map(f => {
+    const open = state.expanded.has(f.key);
+    const vals = open ? f.values : f.values.slice(0, FACET_LIMIT);
+    return `<div class="facet"><h3>${esc(f.label)}</h3>${vals.map(v =>
+      `<label><input type="checkbox" data-facet="${esc(f.key)}" value="${esc(v.value)}" ${v.selected ? "checked" : ""}> ${esc(v.value)}<span class="n">${v.count}</span></label>`).join("")}
+      ${f.values.length > FACET_LIMIT ? `<button type="button" class="more" data-more="${esc(f.key)}">${open ? "פחות" : `עוד ${f.values.length - FACET_LIMIT}`}</button>` : ""}</div>`;
+  }).join("");
+}
+
+$("#facets").addEventListener("change", e => {
+  const key = e.target.dataset.facet; if (!key) return;
+  const set = new Set(state.facets[key] || []);
+  e.target.checked ? set.add(e.target.value) : set.delete(e.target.value);
+  state.facets[key] = [...set];
+  if (!set.size) delete state.facets[key];
+  run(false);
+});
+$("#facets").addEventListener("click", e => {
+  const key = e.target.dataset.more; if (!key) return;
+  state.expanded.has(key) ? state.expanded.delete(key) : state.expanded.add(key);
+  run(false);
+});
+
+let timer;
+function debounced() { clearTimeout(timer); timer = setTimeout(() => run(false), 400); }
+["#pmin", "#pmax", "#include", "#exclude"].forEach(id => $(id).addEventListener("input", debounced));
+["#instock", "#hasprice", "#relevant", "#sort"].forEach(id => $(id).addEventListener("change", () => run(false)));
+$("#clear").addEventListener("click", () => {
+  state.facets = {};
+  ["#pmin", "#pmax", "#include", "#exclude"].forEach(id => $(id).value = "");
+  ["#instock", "#hasprice", "#relevant"].forEach(id => $(id).checked = false);
+  run(false);
+});
+$("#filtersToggle").addEventListener("click", () => $("#filters").classList.toggle("open"));
+$("#form").addEventListener("submit", e => {
+  e.preventDefault();
+  if ($("#q").value.trim() !== state.lastQuery) state.facets = {};
+  run($("#refresh").checked);
+});
+
+loadPrefs();
+segment("#basis", "basis");
+segment("#view", "view");
+loadSites().then(() => {
+  const m = location.hash.match(/q=([^&]+)/);
+  if (m) { $("#q").value = decodeURIComponent(m[1]); run(false); }
+});
+</script>
+</body>
+</html>

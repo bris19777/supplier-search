@@ -1,0 +1,239 @@
+"""Getting pages from the supplier sites.
+
+Two ways, chosen per site with `fetch:` in sites.yaml:
+  http     plain HTTPS request; fast, for open sites
+  browser  a real Chrome via Playwright, for sites behind a Cloudflare challenge,
+           JS-rendered results, or a dealer login
+
+Browser sites each get their own persistent profile under data/profiles/<id>,
+so Cloudflare clearance and login cookies survive restarts. A site that needs a
+human (captcha, SMS code) can be opened in a visible window once with
+open_interactive(); afterwards the headless searches reuse that session.
+"""
+
+import asyncio
+import os
+import ssl
+
+import httpx
+
+from .config import DATA_DIR
+
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
+HEADERS = {
+    "User-Agent": UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+    "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+
+
+CHALLENGE_TITLES = ("just a moment", "attention required", "checking your browser",
+                    "עבור לדף המבוקש", "please wait", "ddos")
+
+
+class NeedsLogin(Exception):
+    """The site shows prices only to a logged-in dealer and login did not succeed.
+
+    Carries the page as a guest saw it, for sites whose login is `optional`."""
+
+    def __init__(self, message, content=None):
+        super().__init__(message)
+        self.content = content
+
+
+class HttpFetcher:
+    def __init__(self):
+        self._clients = {}
+
+    def _client(self, site, timeout):
+        client = self._clients.get(site["id"])
+        if client is None:
+            verify = True
+            if site.get("tls_legacy"):
+                # some sites still use a DH key OpenSSL 3 rejects by default;
+                # certificate verification stays on, only the cipher floor is lowered
+                verify = ssl.create_default_context()
+                verify.set_ciphers("DEFAULT@SECLEVEL=0")
+            client = httpx.AsyncClient(headers={**HEADERS, **(site.get("headers") or {})},
+                                       follow_redirects=True, verify=verify, timeout=timeout)
+            self._clients[site["id"]] = client
+        return client
+
+    async def get(self, site, url, timeout):
+        r = await self._client(site, timeout).get(url)
+        if r.status_code in (401, 403) and "cf-mitigated" in r.headers:
+            raise RuntimeError("חסום ע\"י Cloudflare - יש להעביר את האתר ל-fetch: browser")
+        r.raise_for_status()
+        return r.text
+
+    async def close(self):
+        for c in self._clients.values():
+            await c.aclose()
+        self._clients.clear()
+
+
+class BrowserPool:
+    def __init__(self, settings):
+        self.settings = settings
+        self._pw = None
+        self._contexts = {}
+        self._locks = {}
+        self._interactive = set()
+
+    async def _playwright(self):
+        if self._pw is None:
+            from playwright.async_api import async_playwright
+            self._pw = await async_playwright().start()
+        return self._pw
+
+    async def _launch(self, site_id, headless):
+        pw = await self._playwright()
+        profile = os.path.join(DATA_DIR, "profiles", site_id)
+        os.makedirs(profile, exist_ok=True)
+        opts = dict(user_data_dir=profile, headless=headless, locale="he-IL",
+                    viewport={"width": 1366, "height": 900},
+                    args=["--disable-blink-features=AutomationControlled"])
+        if headless:
+            # headless Chrome announces itself as "HeadlessChrome", which some stores block
+            opts["user_agent"] = UA
+        exe = os.environ.get("BROWSER_EXECUTABLE")
+        if exe:
+            return await pw.chromium.launch_persistent_context(executable_path=exe, **opts)
+        channel = self.settings.get("channel")
+        if channel:
+            try:
+                return await pw.chromium.launch_persistent_context(channel=channel, **opts)
+            except Exception:
+                pass  # Chrome not installed: use Playwright's own Chromium
+        return await pw.chromium.launch_persistent_context(**opts)
+
+    async def context(self, site_id):
+        lock = self._locks.setdefault(site_id, asyncio.Lock())
+        async with lock:
+            if site_id in self._interactive:
+                raise RuntimeError("חלון התחברות פתוח לאתר הזה - סגור אותו כדי לחפש")
+            ctx = self._contexts.get(site_id)
+            if ctx is None:
+                ctx = await self._launch(site_id, self.settings.get("headless", True))
+                self._contexts[site_id] = ctx
+            return ctx
+
+    async def get(self, site, url, timeout, credentials=None):
+        ctx = await self.context(site["id"])
+        page = await ctx.new_page()
+        try:
+            html = await self._load(page, site, url, timeout)
+            login = site.get("login")
+            if login and login.get("logged_in") and not await page.query_selector(login["logged_in"]):
+                if not credentials or not login.get("username"):
+                    raise NeedsLogin("לא מחובר - מחירים מוסתרים. לחץ 'התחברות' או הגדר פרטי כניסה", html)
+                await self._login(page, login, credentials, timeout)
+                html = await self._load(page, site, url, timeout)
+                if not await page.query_selector(login["logged_in"]):
+                    raise NeedsLogin("ההתחברות נכשלה - בדוק את הפרטים או לחץ 'התחברות'", html)
+            return html
+        finally:
+            await page.close()
+
+    async def _load(self, page, site, url, timeout):
+        resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+        if site.get("format") == "json":
+            return await resp.text()
+        wait_for = site.get("wait_for") or site.get("item")
+        try:
+            await page.wait_for_load_state("load", timeout=timeout * 1000 // 2)
+        except Exception:
+            pass
+        if not await page.query_selector(wait_for):
+            # A challenge/interstitial page resolves itself within seconds in a real
+            # browser, so wait long for it; otherwise give late scripts a moment only,
+            # since "no results" is a valid outcome.
+            title = (await page.title()).lower()
+            challenge = any(w in title for w in CHALLENGE_TITLES)
+            try:
+                await page.wait_for_selector(wait_for, timeout=(timeout * 1000 * 2 // 3) if challenge else 3000)
+            except Exception:
+                pass
+        return await page.content()
+
+    async def _login(self, page, login, credentials, timeout):
+        await page.goto(login["url"], wait_until="domcontentloaded", timeout=timeout * 1000)
+        await page.fill(login["username"], str(credentials.get("username", "")))
+        await page.fill(login["password"], str(credentials.get("password", "")))
+        if login.get("submit") and await page.query_selector(login["submit"]):
+            await page.click(login["submit"])
+        else:
+            await page.press(login["password"], "Enter")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=timeout * 1000)
+        except Exception:
+            pass
+
+    async def open_interactive(self, site):
+        """Show the site in a visible window so the user can log in / pass a captcha.
+
+        Returns once the window is closed; the session is kept in the profile."""
+        site_id = site["id"]
+        lock = self._locks.setdefault(site_id, asyncio.Lock())
+        async with lock:
+            if site_id in self._interactive:
+                return
+            ctx = self._contexts.pop(site_id, None)
+            if ctx is not None:
+                await ctx.close()
+            self._interactive.add(site_id)
+        try:
+            ctx = await self._launch(site_id, headless=False)
+            self._record_pages(ctx, site_id)
+            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            start = (site.get("login") or {}).get("url") or site.get("home") or site["search_url"].split("?")[0]
+            try:
+                await page.goto(start)
+            except Exception:
+                pass  # the user can still navigate by hand
+            closed = asyncio.Event()
+            ctx.on("close", lambda *_: closed.set())
+            await closed.wait()
+        finally:
+            self._interactive.discard(site_id)
+
+    def _record_pages(self, ctx, site_id):
+        """Save every page the user opens in the visible window to data/captures/<site>/.
+
+        That is how a new site gets configured: log in, run one search by hand,
+        close the window, and send the saved pages to whoever writes the selectors."""
+        folder = os.path.join(DATA_DIR, "captures", site_id)
+        os.makedirs(folder, exist_ok=True)
+        counter = [len(os.listdir(folder))]
+
+        async def save(page):
+            try:
+                html = await page.content()
+            except Exception:
+                return
+            counter[0] += 1
+            path = os.path.join(folder, f"{counter[0]:03d}.html")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(f"<!-- captured from: {page.url} -->\n{html}")
+
+        def watch(page):
+            page.on("load", lambda p: asyncio.ensure_future(save(p)))
+
+        for p in ctx.pages:
+            watch(p)
+        ctx.on("page", watch)
+
+    def is_interactive(self, site_id):
+        return site_id in self._interactive
+
+    async def close(self):
+        for ctx in list(self._contexts.values()):
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+        self._contexts.clear()
+        if self._pw is not None:
+            await self._pw.stop()
+            self._pw = None

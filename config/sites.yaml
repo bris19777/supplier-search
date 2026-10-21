@@ -1,0 +1,126 @@
+# Supplier sites. Field-spec syntax is documented at the top of supsearch/parse.py.
+#
+# fetch: http     plain request (fast); fetch: browser  real Chrome (Cloudflare, login)
+# login.optional  the guest page still lists products (without dealer prices), so a
+#                 missing login only shows a warning instead of failing the site
+# Selectors marked "unverified" were written without a dealer account; check them
+# once logged in (see README: "תיקון אתר").
+
+settings:
+  headless: true      # false = watch the browsers work (for debugging)
+  channel: chrome     # the installed Google Chrome; Playwright's Chromium if missing
+  timeout: 30         # seconds per site
+  cache_minutes: 10
+  vat_rate: 0.18
+  rates:              # used only if the Bank of Israel rate can't be fetched
+    USD: 3.7
+
+sites:
+  - id: techno
+    name: טכנו-רצף
+    enabled: true
+    home: https://techno-rezef.com/
+    fetch: browser
+    # in-stock only: guests see no stock, and sold-out items dominate the results otherwise
+    search_url: "https://techno-rezef.com/search?q={query}&type=product&filter.v.availability=1"
+    page_url: "https://techno-rezef.com/search?q={query}&type=product&filter.v.availability=1&page={page}"
+    pages: 2
+    page_size: 16
+    item: "product-card"
+    fields:
+      title: ".card__title a"
+      url: ".card__title a@href"
+      image: ["img.card__main-image@data-src", "noscript img@src"]
+      sku: {sel: ".card__vendor", re: '^\s*(.+?)\s*\|'}
+      mpn: {sel: ".card__vendor", re: '^\s*(.+?)\s*\|'}
+      brand: {sel: ".card__vendor", re: '\|\s*(.+?)\s*$'}
+      price: [".price__current", ".price .money", ".price"]   # unverified: rendered only for dealers
+      stock: {const: "במלאי"}
+    vat_included: false
+    stock_default: true
+    login:
+      optional: true
+      url: https://techno-rezef.com/account/login
+      username: "#customer-email"
+      password: "#customer-password"
+      submit: "#customer_login button"
+      logged_in: 'a[href="/account"]'                          # unverified
+    notes: >-
+      Shopify B2B. Prices and stock only for logged-in dealers. Search is loose
+      ("ssd" also returns laptops with an SSD). 16 items per page.
+
+  - id: visual
+    name: ויזואל
+    enabled: true
+    home: https://www.visualdg.co.il/
+    fetch: browser
+    search_url: "https://www.visualdg.co.il/search/?q={query}"
+    page_url: "https://www.visualdg.co.il/search?page={page}&q={query}"
+    pages: 3
+    page_size: 12
+    item: "#layout_items div.layout_list_item"
+    fields:
+      title: "h3.title"
+      url: "a@href"
+      image: ["img@data-src", "img@src"]
+      sku: {sel: "@id", re: 'item_id_(\d+)'}
+      mpn: "p.code"
+      brand: {sel: ".brand_json", re: '"title":"\s*([^"]+?)\s*"'}
+      price: "p.price"
+      stock: {sel: ".stock_show", re: '^([01])$'}   # 1 in stock, 0 out, 2 on the way (unknown)
+    currency: USD        # the store is set to USD; verify once logged in
+    vat_included: false  # unverified
+    login:
+      optional: true
+      url: https://www.visualdg.co.il/customer_login
+      username: "#customer_session_username"
+      password: "#customer_session_password"
+      submit: '#new_customer_session [type="submit"]'
+      logged_in: 'a[href*="customer_logout"]:visible'   # unverified
+    notes: >-
+      Konimbo. Prices for club (dealer) customers only. Search also matches
+      descriptions, so generic words are noisy. 12 items per page.
+
+  - id: amtel
+    name: אמטל
+    enabled: true
+    home: https://www.amtel.co.il/
+    fetch: browser
+    search_url: "https://www.amtel.co.il/search/?q={query}"
+    page_url: "https://www.amtel.co.il/search?page={page}&q={query}"
+    pages: 2
+    page_size: 40
+    item: "#layout_items div.layout_list_item"
+    fields:
+      title: "h3.title"
+      url: "a@href"
+      image: ["img@data-src", "img@src"]
+      sku: ".item_code span"
+      mpn: {sel: ".item_code span", re: '^(?=.*[A-Za-z])(\S+)$'}   # barcodes are not part numbers
+      brand: {sel: ".brand_json", re: '"title":"\s*([^"]+?)\s*"'}
+      price: "p.price"
+    vat_included: false  # the site states prices exclude VAT
+    login:
+      optional: true
+      url: https://www.amtel.co.il/customer_login
+      username: "#customer_session_username"
+      password: "#customer_session_password"
+      submit: '#new_customer_session [type="submit"]'
+      logged_in: 'a[href*="customer_logout"]:visible'   # unverified
+    notes: >-
+      Konimbo. Prices and stock for dealers only. 40 items per page.
+
+  # Behind a Cloudflare challenge and dealer login; could not be inspected from outside.
+  # To configure: click "פתח והקלט" in the UI, log in, run one search, close the window,
+  # and send the pages saved in data/captures/<id>/.
+  - id: cms
+    name: CMS
+    enabled: false
+    home: https://cms.co.il/
+    fetch: browser
+
+  - id: grand
+    name: גראנד אדוונס
+    enabled: false
+    home: https://www.grandadvance.co.il/
+    fetch: browser
