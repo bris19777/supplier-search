@@ -49,9 +49,16 @@ def load_sites(path=None):
 
 
 def load_credentials(path=None):
-    """{site_id: {"username": ..., "password": ...}}; missing file means no logins."""
+    """{site_id: {"username": ..., "password": ...}}; missing file means no logins.
+
+    On a cloud host the same YAML comes from the SUPPLIER_CREDENTIALS secret, and
+    its entries take precedence over the file."""
     path = path or os.path.join(CONFIG_DIR, "credentials.yaml")
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    creds = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            creds = yaml.safe_load(f) or {}
+    env = os.environ.get("SUPPLIER_CREDENTIALS", "").strip()
+    if env:
+        creds.update(yaml.safe_load(env) or {})
+    return creds

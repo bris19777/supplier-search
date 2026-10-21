@@ -174,7 +174,7 @@ function renderSites(results) {
   const byId = Object.fromEntries((results || []).map(r => [r.site, r]));
   $("#sites").innerHTML = state.sites.map(s => {
     if (!s.enabled) {
-      return `<span class="chip off" title="${esc(s.notes || "")}">${esc(s.name)} · טרם הוגדר${s.fetch === "browser" ? ` <button type="button" data-login="${esc(s.id)}" title="פותח את האתר בחלון גלוי ושומר כל דף שנפתח, כדי להגדיר את האתר">פתח והקלט</button>` : ""}</span>`;
+      return `<span class="chip off" title="${esc(s.notes || "")}">${esc(s.name)} · טרם הוגדר${s.fetch === "browser" && s.can_open_window ? ` <button type="button" data-login="${esc(s.id)}" title="פותח את האתר בחלון גלוי ושומר כל דף שנפתח, כדי להגדיר את האתר">פתח והקלט</button>` : ""}</span>`;
     }
     const r = byId[s.id];
     const off = state.disabled.has(s.id);
@@ -186,7 +186,7 @@ function renderSites(results) {
       else { cls += " ok"; info = `${r.count} · ${r.elapsed} שנ'${r.cached ? " · זיכרון" : ""}`; }
     }
     const title = esc((r && r.error) || s.notes || "");
-    const loginBtn = s.fetch === "browser" ? `<button type="button" data-login="${esc(s.id)}" title="פתיחת חלון דפדפן במחשב השרת להתחברות ידנית">התחברות</button>` : "";
+    const loginBtn = s.fetch === "browser" && s.can_open_window ? `<button type="button" data-login="${esc(s.id)}" title="פתיחת חלון דפדפן במחשב השרת להתחברות ידנית">התחברות</button>` : "";
     return `<span class="${cls}" title="${title}"><label><input type="checkbox" data-site="${esc(s.id)}" ${off ? "" : "checked"}> ${esc(s.name)}</label>${info ? `<span>${esc(info)}</span>` : ""}${loginBtn}</span>`;
   }).join("");
 }

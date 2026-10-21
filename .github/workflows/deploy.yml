@@ -1,0 +1,62 @@
+name: test and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest -q
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency: deploy
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_ORG: ${{ vars.FLY_ORG || 'personal' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fly not connected yet
+        if: env.FLY_API_TOKEN == ''
+        run: echo "::warning::Add the FLY_API_TOKEN repository secret to deploy to Fly.io"
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: env.FLY_API_TOKEN != ''
+
+      - name: Create the app and its volume on the first deploy
+        if: env.FLY_API_TOKEN != ''
+        run: |
+          APP=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
+          REGION=$(sed -n 's/^primary_region = "\(.*\)"/\1/p' fly.toml)
+          flyctl status -a "$APP" >/dev/null 2>&1 || flyctl apps create "$APP" --org "$FLY_ORG"
+          flyctl volumes list -a "$APP" | grep -q supsearch_data \
+            || flyctl volumes create supsearch_data -a "$APP" -r "$REGION" -s 1 -y
+
+      - name: Copy secrets to Fly
+        if: env.FLY_API_TOKEN != ''
+        env:
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+          SUPPLIER_CREDENTIALS: ${{ secrets.SUPPLIER_CREDENTIALS }}
+        run: |
+          APP=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
+          args=()
+          [ -n "$APP_PASSWORD" ] && args+=("APP_PASSWORD=$APP_PASSWORD")
+          [ -n "$SUPPLIER_CREDENTIALS" ] && args+=("SUPPLIER_CREDENTIALS=$SUPPLIER_CREDENTIALS")
+          if [ ${#args[@]} -gt 0 ]; then flyctl secrets set --stage -a "$APP" "${args[@]}"; fi
+
+      - name: Deploy
+        if: env.FLY_API_TOKEN != ''
+        run: flyctl deploy --remote-only

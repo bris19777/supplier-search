@@ -1,17 +1,19 @@
 """Web server: the Hebrew search UI and its JSON API.
 
-Runs on the office PC (python -m supsearch). Binds to localhost by default;
-set HOST=0.0.0.0 to reach it from other machines on the LAN, and then also set
-APP_PASSWORD, since the server holds the dealer logins.
+Runs on the office PC (python -m supsearch) or on a cloud host (Dockerfile,
+fly.toml). Binds to localhost by default; set HOST=0.0.0.0 to reach it from
+other machines, and then also set APP_PASSWORD, since the server holds the
+dealer logins. REQUIRE_PASSWORD=1 (set on Fly) refuses to serve without one.
 """
 
 import asyncio
 import os
 import secrets
+import sys
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
@@ -22,14 +24,23 @@ from .config import DATA_DIR, load_credentials, load_sites
 from .parse import parse_results
 
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+REQUIRE_PASSWORD = os.environ.get("REQUIRE_PASSWORD") == "1"
+# A visible login window needs a screen: not on a headless Linux server
+_interactive_env = os.environ.get("INTERACTIVE_LOGIN", "auto")
+INTERACTIVE = _interactive_env == "1" or (
+    _interactive_env == "auto" and not (sys.platform.startswith("linux") and not os.environ.get("DISPLAY")))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_ITEMS = 600
 
 _basic = HTTPBasic(auto_error=False)
 
 
-def auth(creds: HTTPBasicCredentials = Depends(_basic)):
+def auth(request: Request, creds: HTTPBasicCredentials = Depends(_basic)):
+    if request.url.path == "/healthz":
+        return
     if not APP_PASSWORD:
+        if REQUIRE_PASSWORD:
+            raise HTTPException(503, "השרת נעול: יש להגדיר APP_PASSWORD")
         return
     if creds is None or not secrets.compare_digest(creds.password, APP_PASSWORD):
         raise HTTPException(401, "סיסמה שגויה", headers={"WWW-Authenticate": "Basic"})
@@ -67,6 +78,10 @@ def create_app(sites_path=None, credentials_path=None):
     class CaptureRequest(BaseModel):
         query: str
 
+    @app.get("/healthz")
+    async def healthz():
+        return {"ok": True}
+
     @app.get("/")
     async def index():
         return FileResponse(os.path.join(STATIC, "index.html"))
@@ -78,7 +93,8 @@ def create_app(sites_path=None, credentials_path=None):
             "id": s["id"], "name": s["name"], "enabled": bool(s.get("enabled")),
             "fetch": s.get("fetch"), "home": s.get("home", ""),
             "login": bool(s.get("login")), "has_credentials": s["id"] in agg.credentials,
-            "interactive": agg.browser.is_interactive(s["id"]), "notes": s.get("notes", ""),
+            "interactive": agg.browser.is_interactive(s["id"]), "can_open_window": INTERACTIVE,
+            "notes": s.get("notes", ""),
         } for s in agg.sites]
 
     @app.post("/api/search")
@@ -113,6 +129,8 @@ def create_app(sites_path=None, credentials_path=None):
             raise HTTPException(404, "אתר לא קיים")
         if site.get("fetch") != "browser":
             raise HTTPException(400, "האתר מוגדר כ-fetch: http ואינו משתמש בדפדפן")
+        if not INTERACTIVE:
+            raise HTTPException(400, "בשרת ענן אין מסך לחלון התחברות - הגדר את פרטי הכניסה ב-SUPPLIER_CREDENTIALS")
         if agg.browser.is_interactive(site_id):
             return {"ok": True, "message": "חלון ההתחברות לאתר הזה כבר פתוח במחשב השרת."}
         task = asyncio.create_task(agg.browser.open_interactive(site))

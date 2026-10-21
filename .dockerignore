@@ -1,0 +1,9 @@
+.git
+.github
+.venv
+data
+tests
+__pycache__
+*.pyc
+config/credentials.yaml
+*.bat

@@ -139,3 +139,23 @@ def test_filters_through_api(client):
 
 def test_empty_query_rejected(client):
     assert client.post("/api/search", json={"query": "  "}).status_code == 400
+
+
+def test_password_and_healthz(monkeypatch, client):
+    from supsearch import app as appmod
+    monkeypatch.setattr(appmod, "APP_PASSWORD", "pw")
+    assert client.get("/healthz").status_code == 200       # Fly health checks need no login
+    assert client.get("/api/sites").status_code == 401
+    assert client.get("/api/sites", auth=("x", "pw")).status_code == 200
+    monkeypatch.setattr(appmod, "APP_PASSWORD", "")
+    monkeypatch.setattr(appmod, "REQUIRE_PASSWORD", True)
+    assert client.get("/api/sites").status_code == 503     # never public by accident
+
+
+def test_credentials_from_env(monkeypatch, tmp_path):
+    from supsearch.config import load_credentials
+    f = tmp_path / "c.yaml"
+    f.write_text("a: {username: file, password: x}\nb: {username: fileb, password: y}\n")
+    monkeypatch.setenv("SUPPLIER_CREDENTIALS", "b: {username: env, password: z}")
+    creds = load_credentials(str(f))
+    assert creds["a"]["username"] == "file" and creds["b"]["username"] == "env"

@@ -77,6 +77,35 @@ set HOST=0.0.0.0
 set APP_PASSWORD=סיסמה-חזקה
 ```
 
+## העלאה ל-Fly.io
+
+כל `push` לענף `main` מריץ את הבדיקות ב-GitHub Actions, ואם הן עוברות מפרסם ל-Fly
+(`.github/workflows/deploy.yml`). בפרסום הראשון האפליקציה ונפח האחסון נוצרים אוטומטית.
+
+**הגדרה חד-פעמית:** ב-GitHub, בהגדרות הריפו, תחת Settings → Secrets and variables →
+Actions → New repository secret, מוסיפים:
+
+| Secret | מה לשים |
+|--------|---------|
+| `FLY_API_TOKEN` | טוקן מ-Fly: בלוח הבקרה תחת Tokens, או בפקודה `fly tokens create org` |
+| `APP_PASSWORD` | הסיסמה לכניסה לממשק. **חובה**: בלעדיה השרת נעול |
+| `SUPPLIER_CREDENTIALS` | (רשות) פרטי המשווק לכל אתר, באותו פורמט YAML של `credentials.yaml` |
+
+אחרי שמוסיפים את ה-secrets מריצים את ה-workflow מחדש: בלשונית Actions בוחרים
+"test and deploy" ולוחצים "Run workflow". אם חשבון ה-Fly שייך לארגון שאינו `personal`,
+מגדירים גם משתנה (Variable) בשם `FLY_ORG`.
+
+הכתובת: `https://bsd-supplier-search.fly.dev`. בכניסה מזינים שם משתמש כלשהו ואת
+`APP_PASSWORD` כסיסמה.
+
+**ההבדלים מהרצה במשרד:**
+- **אין חלון התחברות** (לשרת אין מסך). ההתחברות לספקים נעשית רק דרך
+  `SUPPLIER_CREDENTIALS`. אתר שדורש קוד SMS או captcha בהתחברות יעבוד רק כאורח.
+- **כתובת IP של ענן (פרנקפורט).** CMS, גראנד אדוונס וסי-דאטה חוסמים כתובות כאלה.
+  טכנו-רצף, ויזואל, אמטל ומור לוי עבדו בבדיקה גם מהענן. לכל הספקים כדאי להריץ במשרד.
+- **עלות:** מכונה עם 2GB זיכרון שמושהית כשאין שימוש (suspend), ונפח אחסון של 1GB
+  לשמירת ההתחברויות.
+
 ## מבנה
 
 | קובץ | תפקיד |

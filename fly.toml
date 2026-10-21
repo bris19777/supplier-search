@@ -1,0 +1,32 @@
+app = "bsd-supplier-search"
+primary_region = "fra"
+
+[build]
+
+[env]
+  SUPSEARCH_DATA = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "20s"
+  method = "GET"
+  path = "/healthz"
+
+# browser profiles: Cloudflare clearance and dealer sessions survive deploys
+[mounts]
+  source = "supsearch_data"
+  destination = "/data"
+
+# one headless Chromium per supplier site
+[[vm]]
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 2
