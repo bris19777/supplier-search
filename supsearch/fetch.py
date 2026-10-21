@@ -32,6 +32,10 @@ CHALLENGE_TITLES = ("just a moment", "attention required", "checking your browse
                     "עבור לדף המבוקש", "please wait", "ddos")
 
 
+# firewall rejection pages (F5 "Request Rejected" and the like); retried, then reported
+BLOCKED_TITLES = ("request rejected", "access denied", "error page", "403 forbidden")
+
+
 class NeedsLogin(Exception):
     """The site shows prices only to a logged-in dealer and login did not succeed.
 
@@ -80,6 +84,7 @@ class BrowserPool:
         self._contexts = {}
         self._locks = {}
         self._interactive = set()
+        self._prepared = set()  # sites whose setup_url was visited in the current context
 
     async def _playwright(self):
         if self._pw is None:
@@ -119,13 +124,19 @@ class BrowserPool:
                 self._contexts[site_id] = ctx
             return ctx
 
-    async def get(self, site, url, timeout, credentials=None):
+    async def get(self, site, url, timeout, credentials=None, check_login=True):
+        """Load one results page. check_login=False for page 2+, which on some
+        sites is a bare fragment without the header that shows the login state."""
         ctx = await self.context(site["id"])
         page = await ctx.new_page()
         try:
+            if site.get("setup_url") and site["id"] not in self._prepared:
+                # e.g. switching the store's display currency to shekels, once per session
+                await page.goto(site["setup_url"], wait_until="domcontentloaded", timeout=timeout * 1000)
+                self._prepared.add(site["id"])
             html = await self._load(page, site, url, timeout)
             login = site.get("login")
-            if login and login.get("logged_in") and not await page.query_selector(login["logged_in"]):
+            if check_login and login and login.get("logged_in") and not await page.query_selector(login["logged_in"]):
                 if not credentials or not login.get("username"):
                     raise NeedsLogin("לא מחובר - מחירים מוסתרים. לחץ 'התחברות' או הגדר פרטי כניסה", html)
                 await self._login(page, login, credentials, timeout)
@@ -137,7 +148,19 @@ class BrowserPool:
             await page.close()
 
     async def _load(self, page, site, url, timeout):
-        resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+        retries = int(site.get("retries", 0))
+        for attempt in range(retries + 1):
+            resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+            title = (await page.title()).lower()
+            if any(w in title for w in CHALLENGE_TITLES):
+                break  # a challenge page solves itself below; reloading would restart it
+            blocked = (resp is not None and resp.status in (403, 429, 503)) or \
+                any(w in title for w in BLOCKED_TITLES)
+            if not blocked:
+                break
+            if attempt == retries:
+                raise RuntimeError("חומת האש של האתר חסמה את הבקשה - נסה שוב בעוד רגע")
+            await asyncio.sleep(2 * (attempt + 1))  # firewalls that block intermittently
         if site.get("format") == "json":
             return await resp.text()
         wait_for = site.get("wait_for") or site.get("item")
@@ -159,6 +182,14 @@ class BrowserPool:
 
     async def _login(self, page, login, credentials, timeout):
         await page.goto(login["url"], wait_until="domcontentloaded", timeout=timeout * 1000)
+        for selector in (login.get("dismiss"), login.get("open")):
+            # a site-wide popup to close, then the button that opens a login dialog
+            if selector and await page.query_selector(selector):
+                try:
+                    await page.click(selector, timeout=5000)
+                except Exception:
+                    pass
+        await page.wait_for_selector(login["username"], timeout=timeout * 1000 // 2)
         await page.fill(login["username"], str(credentials.get("username", "")))
         await page.fill(login["password"], str(credentials.get("password", "")))
         if login.get("submit") and await page.query_selector(login["submit"]):
@@ -182,6 +213,7 @@ class BrowserPool:
             ctx = self._contexts.pop(site_id, None)
             if ctx is not None:
                 await ctx.close()
+            self._prepared.discard(site_id)
             self._interactive.add(site_id)
         try:
             ctx = await self._launch(site_id, headless=False)

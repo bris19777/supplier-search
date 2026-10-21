@@ -18,7 +18,7 @@ For format: json, "item" and the field specs are dot paths into the JSON
 
 import json
 import re
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 from bs4 import BeautifulSoup
 
@@ -28,6 +28,7 @@ from .normalize import (detect_brand, extract_specs, parse_price, parse_stock,
 
 FIELDS = ("title", "url", "image", "sku", "mpn", "brand", "category", "price", "stock")
 _ATTR_TAIL = re.compile(r"^(.*?)@([\w:-]+)$")
+_SRCSET = re.compile(r"\s\d+(?:\.\d+)?[wx]\s*(?:,|$)")
 
 
 def _clean(text):
@@ -138,7 +139,10 @@ def parse_results(content, site, page_url, vat_rate=0.18, rates=None):
             in_stock = bool(site["stock_default"])
         image = str(raw["image"] or "")
         if image and not image.startswith("data:"):
-            image = urljoin(page_url, image.split(",")[0].split(" ")[0])
+            if _SRCSET.search(image):  # "a.jpg 1x, b.jpg 2x": keep the first candidate
+                image = image.split(",")[0].strip().split(" ")[0]
+            # some sites put spaces and commas in image paths (/cache/w_280,h_250/a b.png)
+            image = quote(urljoin(page_url, image), safe=":/?&=%#,;@+~")
         else:
             image = ""
         brand = _clean(raw["brand"]) or detect_brand(title)

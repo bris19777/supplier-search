@@ -80,3 +80,12 @@ def test_foreign_currency_converted_to_shekels():
     assert p.price_ex_vat == 310.0 and p.price_inc_vat == 365.8
     [p] = parse_results(html, site, "https://u.test/", rates={})  # rate unknown: no shekel price
     assert p.price == 100 and p.price_inc_vat is None
+
+
+def test_image_urls_with_commas_spaces_and_srcset():
+    site = {"id": "s", "name": "S", "item": ".c", "fields": {"title": "b", "image": "img@src"}}
+    html = ('<div class="c"><b>A</b><img src="/cache/w_280,h_250,mode_pad/My Pic.png"></div>'
+            '<div class="c"><b>B</b><img src="/s.jpg 1x, /l.jpg 2x"></div>')
+    a, b = parse_results(html, site, "https://m.test/cat/0")
+    assert a.image == "https://m.test/cache/w_280,h_250,mode_pad/My%20Pic.png"
+    assert b.image == "https://m.test/s.jpg"

@@ -110,6 +110,71 @@ sites:
     notes: >-
       Konimbo. Prices and stock for dealers only. 40 items per page.
 
+  - id: morlevi
+    name: מור לוי
+    enabled: true
+    home: https://www.morlevi.co.il/
+    fetch: browser
+    tls_legacy: true     # only matters with fetch: http (old DH key)
+    search_url: "https://www.morlevi.co.il/cat/0?keyword={query}"
+    page_url: "https://www.morlevi.co.il/cat/0?keyword={query}&page={page}"
+    pages: 2
+    page_size: 28
+    item: "div.product-thumb"
+    fields:
+      title: "h5.title"
+      url: "a.thumb@href"
+      image: ["img.thumb-main-pic@data-src", "img.thumb-main-pic@src"]
+      sku: ".details h6:not(.man-sku) .sku-copy@data-sku"
+      mpn: ".man-sku .sku-copy@data-sku"
+      brand: ".manu img@alt"
+      price: "small.price"   # unverified: empty for guests
+      stock: ".stockMsg"
+    vat_included: false      # the site states prices exclude VAT
+    login:
+      optional: true
+      url: https://www.morlevi.co.il/
+      dismiss: "#site-popup-modal .close, #site-popup-modal [data-dismiss='modal'], #site-popup-modal [data-bs-dismiss='modal']"
+      open: "a[data-modal='/User/Login']"            # login is a dialog, not a page
+      username: "form[action='/loginpost'] input[name=Email]"
+      password: "form[action='/loginpost'] input[name=Password]"
+      submit: "form[action='/loginpost'] button[type=submit]"
+      logged_in: "ul.user-panel:not(:has(a[data-modal='/User/Login']))"   # unverified
+    notes: >-
+      Business-only store; prices for approved accounts. 28 items per page.
+
+  - id: cdata
+    name: סי-דאטה
+    enabled: true
+    home: https://c-data.co.il/
+    fetch: browser
+    retries: 3           # the site's firewall blocks some requests at random
+    setup_url: https://c-data.co.il/changecurrency/13   # show prices in shekels
+    search_url: "https://c-data.co.il/filterSearch?q={query}"
+    page_url: "https://c-data.co.il/product/search?q={query}&pagenumber={page}"
+    pages: 2
+    page_size: 21
+    item: "div.item-box div.product-item"
+    wait_for: ".products-wrapper, .product-grid"
+    fields:
+      title: ".product-title a"
+      url: ".product-title a@href"
+      image: ["img.product-image@data-lazyloadsrc", "img.product-image@data-src", "img.product-image@src"]
+      sku: ".sku"
+      mpn: ".sku"
+      price: [".prices .actual-price", ".prices .price"]   # unverified: empty for guests
+    vat_included: false  # unverified
+    login:
+      optional: true
+      url: https://reseller.c-data.co.il/Login
+      username: "input#Email"
+      password: "input#Password"
+      submit: "button.login-button"
+      logged_in: "a.ico-logout"                             # unverified
+    notes: >-
+      nopCommerce, prices for resellers only. Titles are in English (Hebrew queries find
+      nothing) and a query needs at least 3 characters. 21 items per page.
+
   # Behind a Cloudflare challenge and dealer login; could not be inspected from outside.
   # To configure: click "פתח והקלט" in the UI, log in, run one search, close the window,
   # and send the pages saved in data/captures/<id>/.

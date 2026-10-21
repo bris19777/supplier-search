@@ -74,3 +74,9 @@ def test_extract_specs_pipe_separated_titles():
     assert s["ram"] == "16GB" and s["storage"] == "1TB" and s["os"] == "Windows 11 Pro"
     # a single size is not guessed as RAM or storage
     assert "ram" not in extract_specs("Kingston Fury 16GB kit") and "storage" not in extract_specs("Kingston Fury 16GB kit")
+
+
+def test_parse_stock_discontinued():
+    assert parse_stock("מוצר זה אינו מיוצר יותר") is False
+    assert parse_stock("מלאי חסר") is False
+    assert parse_stock("זמין במלאי") is True

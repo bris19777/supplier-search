@@ -64,9 +64,10 @@ class Aggregator:
             fallback = (self.settings.get("rates") or {}).get(currency)
             return float(fallback) if fallback else None
 
-    async def fetch(self, site, url, timeout):
+    async def fetch(self, site, url, timeout, first_page=True):
         if site.get("fetch") == "browser":
-            return await self.browser.get(site, url, timeout, self.credentials.get(site["id"]))
+            return await self.browser.get(site, url, timeout, self.credentials.get(site["id"]),
+                                          check_login=first_page)
         return await self.http.get(site, url, timeout)
 
     async def search_site(self, site, query, refresh=False):
@@ -87,9 +88,9 @@ class Aggregator:
         try:
             async def run():
                 seen = set()
-                for url in page_urls(site, query):
+                for n, url in enumerate(page_urls(site, query)):
                     try:
-                        content = await self.fetch(site, url, timeout)
+                        content = await self.fetch(site, url, timeout, first_page=n == 0)
                     except NeedsLogin as e:
                         if not (site.get("login") or {}).get("optional") or e.content is None:
                             raise

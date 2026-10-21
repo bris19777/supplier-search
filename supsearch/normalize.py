@@ -40,6 +40,7 @@ def with_vat(price, vat_included, vat_rate=VAT_RATE):
 
 # Negative phrases first: "לא במלאי" contains "במלאי".
 _OUT_OF_STOCK = ("אזל", "לא במלאי", "אין במלאי", "לא זמין", "חסר", "בהזמנה מיוחדת",
+                 "אינו נמכר", "אינו מיוצר", "לא נמכר", "discontinued",
                  "out of stock", "sold out", "unavailable", "false", "outofstock")
 _IN_STOCK = ("במלאי", "זמין", "קיים", "in stock", "available", "true", "instock",
              "הוסף", "הוספה לסל", "add to cart")
