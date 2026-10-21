@@ -86,6 +86,12 @@ def create_app(sites_path=None, credentials_path=None):
     async def index():
         return FileResponse(os.path.join(STATIC, "index.html"))
 
+    @app.get("/api/info")
+    async def info():
+        # set by start.sh: "office:<exit node>" or "direct:tailscale-failed"; unset = direct
+        kind, _, detail = os.environ.get("EGRESS", "").partition(":")
+        return {"egress": kind or "direct", "egress_detail": detail}
+
     @app.get("/api/sites")
     async def sites():
         agg = state["agg"]

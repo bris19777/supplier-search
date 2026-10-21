@@ -159,3 +159,9 @@ def test_credentials_from_env(monkeypatch, tmp_path):
     monkeypatch.setenv("SUPPLIER_CREDENTIALS", "b: {username: env, password: z}")
     creds = load_credentials(str(f))
     assert creds["a"]["username"] == "file" and creds["b"]["username"] == "env"
+
+
+def test_info_reports_egress(monkeypatch, client):
+    assert client.get("/api/info").json() == {"egress": "direct", "egress_detail": ""}
+    monkeypatch.setenv("EGRESS", "office:office-pc")
+    assert client.get("/api/info").json() == {"egress": "office", "egress_detail": "office-pc"}

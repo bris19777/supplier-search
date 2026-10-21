@@ -11,8 +11,12 @@ RUN pip install -r requirements.txt \
  && python -m playwright install --with-deps chromium \
  && rm -rf /var/lib/apt/lists/*
 
+# Tailscale, to send supplier traffic out through the office PC (see start.sh)
+COPY --from=docker.io/tailscale/tailscale:stable /usr/local/bin/tailscaled /usr/local/bin/tailscale /usr/local/bin/
+
 COPY supsearch ./supsearch
 COPY config ./config
+COPY start.sh ./
 
 # Cloud mode: listen publicly, never without APP_PASSWORD, no visible login windows,
 # browser profiles (Cloudflare clearance, dealer sessions) on the /data volume
@@ -24,4 +28,4 @@ ENV HOST=0.0.0.0 \
     SUPSEARCH_DATA=/data
 EXPOSE 8080
 
-CMD ["python", "-m", "supsearch"]
+CMD ["./start.sh"]

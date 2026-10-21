@@ -50,11 +50,15 @@ jobs:
         env:
           APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
           SUPPLIER_CREDENTIALS: ${{ secrets.SUPPLIER_CREDENTIALS }}
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_EXIT_NODE: ${{ secrets.TS_EXIT_NODE }}
         run: |
           APP=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
           args=()
-          [ -n "$APP_PASSWORD" ] && args+=("APP_PASSWORD=$APP_PASSWORD")
-          [ -n "$SUPPLIER_CREDENTIALS" ] && args+=("SUPPLIER_CREDENTIALS=$SUPPLIER_CREDENTIALS")
+          for name in APP_PASSWORD SUPPLIER_CREDENTIALS TS_AUTHKEY TS_EXIT_NODE; do
+            value=$(printenv "$name" || true)
+            [ -n "$value" ] && args+=("$name=$value")
+          done
           if [ ${#args[@]} -gt 0 ]; then flyctl secrets set --stage -a "$APP" "${args[@]}"; fi
 
       - name: Deploy

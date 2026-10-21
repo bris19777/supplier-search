@@ -20,6 +20,7 @@ DEFAULT_SETTINGS = {
     "timeout": 30,             # seconds per site per search
     "cache_minutes": 10,
     "vat_rate": 0.18,
+    "proxy": "",               # send all supplier traffic through this proxy, see OUTBOUND_PROXY
 }
 
 
@@ -28,6 +29,10 @@ def load_sites(path=None):
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     settings = {**DEFAULT_SETTINGS, **(raw.get("settings") or {})}
+    # On Fly the container's start script points this at Tailscale's local proxy,
+    # so the suppliers see the office IP (the office PC is the Tailscale exit node)
+    if os.environ.get("OUTBOUND_PROXY"):
+        settings["proxy"] = os.environ["OUTBOUND_PROXY"]
     sites = []
     for s in raw.get("sites") or []:
         if not s.get("id"):

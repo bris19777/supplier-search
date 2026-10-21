@@ -6,14 +6,21 @@ Results are cached per (site, query) so changing filters never re-scrapes.
 """
 
 import asyncio
+import re
 import time
 
 import httpx
 from urllib.parse import quote_plus
 
-from .fetch import BrowserPool, HttpFetcher, NeedsLogin
+from .fetch import BrowserPool, HttpFetcher, NeedsLogin, site_proxy
 from .models import SiteResult
 from .parse import parse_results
+
+# The outbound proxy is the office PC (Tailscale exit node); when it is off or
+# disconnected, say so instead of showing a raw network error
+OFFICE_DOWN = "אין יציאה דרך מחשב המשרד - בדוק שהמחשב דלוק ו-Tailscale מחובר כ-exit node"
+# (with a proxy set, httpx only ever connects to the proxy, so ConnectError means it is down)
+_PROXY_DOWN = re.compile(r"ERR_PROXY|ERR_TUNNEL|ERR_SOCKS|ProxyError|ConnectError|proxy", re.I)
 
 BOI_RATE_URL = "https://boi.org.il/PublicApi/GetExchangeRate?key={currency}"
 
@@ -32,7 +39,7 @@ class Aggregator:
         self.settings = settings
         self.sites = sites
         self.credentials = credentials
-        self.http = HttpFetcher()
+        self.http = HttpFetcher(settings)
         self.browser = BrowserPool(settings)
         self._cache = {}
         self._rates = {}  # currency -> (fetched_at, shekels per unit)
@@ -117,6 +124,8 @@ class Aggregator:
         except Exception as e:  # one broken site must never break the whole search
             res.ok = bool(res.items)
             res.error = f"{type(e).__name__}: {e}"[:300]
+            if site_proxy(self.settings, site) and _PROXY_DOWN.search(res.error):
+                res.error = OFFICE_DOWN
         res.elapsed = time.time() - start
         if res.ok and not res.error and not res.needs_login:
             self._cache[key] = (time.time(), res)

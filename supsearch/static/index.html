@@ -87,6 +87,7 @@
     <span class="seg" id="basis"><button type="button" data-v="inc" class="on">כולל מע"מ</button><button type="button" data-v="ex">לפני מע"מ</button></span>
     <span class="seg" id="view"><button type="button" data-v="list" class="on">רשימה</button><button type="button" data-v="compare">השוואה</button></span>
     <button type="button" id="filtersToggle">סינון</button>
+    <span id="egress" class="chip" hidden></span>
   </form>
   <div id="sites"></div>
 </header>
@@ -338,7 +339,22 @@ $("#form").addEventListener("submit", e => {
   run($("#refresh").checked);
 });
 
+async function loadInfo() {
+  try {
+    const j = await (await fetch("api/info")).json();
+    const el = $("#egress");
+    if (j.egress === "office") {
+      el.textContent = "יוצא דרך המשרד"; el.className = "chip ok"; el.title = "Tailscale exit node: " + j.egress_detail;
+      el.hidden = false;
+    } else if (j.egress_detail === "tailscale-failed") {
+      el.textContent = "Tailscale לא מחובר - יוצא ישירות"; el.className = "chip err";
+      el.title = "בדוק את TS_AUTHKEY ו-TS_EXIT_NODE ב-Fly"; el.hidden = false;
+    }
+  } catch (e) {}
+}
+
 loadPrefs();
+loadInfo();
 segment("#basis", "basis");
 segment("#view", "view");
 loadSites().then(() => {

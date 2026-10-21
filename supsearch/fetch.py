@@ -5,6 +5,9 @@ Two ways, chosen per site with `fetch:` in sites.yaml:
   browser  a real Chrome via Playwright, for sites behind a Cloudflare challenge,
            JS-rendered results, or a dealer login
 
+With settings.proxy set (OUTBOUND_PROXY), both ways go through that proxy,
+except for sites marked `direct: true`.
+
 Browser sites each get their own persistent profile under data/profiles/<id>,
 so Cloudflare clearance and login cookies survive restarts. A site that needs a
 human (captcha, SMS code) can be opened in a visible window once with
@@ -46,8 +49,13 @@ class NeedsLogin(Exception):
         self.content = content
 
 
+def site_proxy(settings, site):
+    return None if site.get("direct") else (settings.get("proxy") or None)
+
+
 class HttpFetcher:
-    def __init__(self):
+    def __init__(self, settings=None):
+        self.settings = settings or {}
         self._clients = {}
 
     def _client(self, site, timeout):
@@ -60,7 +68,8 @@ class HttpFetcher:
                 verify = ssl.create_default_context()
                 verify.set_ciphers("DEFAULT@SECLEVEL=0")
             client = httpx.AsyncClient(headers={**HEADERS, **(site.get("headers") or {})},
-                                       follow_redirects=True, verify=verify, timeout=timeout)
+                                       follow_redirects=True, verify=verify, timeout=timeout,
+                                       proxy=site_proxy(self.settings, site))
             self._clients[site["id"]] = client
         return client
 
@@ -92,13 +101,15 @@ class BrowserPool:
             self._pw = await async_playwright().start()
         return self._pw
 
-    async def _launch(self, site_id, headless):
+    async def _launch(self, site_id, headless, proxy=None):
         pw = await self._playwright()
         profile = os.path.join(DATA_DIR, "profiles", site_id)
         os.makedirs(profile, exist_ok=True)
         opts = dict(user_data_dir=profile, headless=headless, locale="he-IL",
                     viewport={"width": 1366, "height": 900},
                     args=["--disable-blink-features=AutomationControlled"])
+        if proxy:
+            opts["proxy"] = {"server": proxy}
         if headless:
             # headless Chrome announces itself as "HeadlessChrome", which some stores block
             opts["user_agent"] = UA
@@ -113,21 +124,21 @@ class BrowserPool:
                 pass  # Chrome not installed: use Playwright's own Chromium
         return await pw.chromium.launch_persistent_context(**opts)
 
-    async def context(self, site_id):
+    async def context(self, site_id, proxy=None):
         lock = self._locks.setdefault(site_id, asyncio.Lock())
         async with lock:
             if site_id in self._interactive:
                 raise RuntimeError("חלון התחברות פתוח לאתר הזה - סגור אותו כדי לחפש")
             ctx = self._contexts.get(site_id)
             if ctx is None:
-                ctx = await self._launch(site_id, self.settings.get("headless", True))
+                ctx = await self._launch(site_id, self.settings.get("headless", True), proxy)
                 self._contexts[site_id] = ctx
             return ctx
 
     async def get(self, site, url, timeout, credentials=None, check_login=True):
         """Load one results page. check_login=False for page 2+, which on some
         sites is a bare fragment without the header that shows the login state."""
-        ctx = await self.context(site["id"])
+        ctx = await self.context(site["id"], site_proxy(self.settings, site))
         page = await ctx.new_page()
         try:
             if site.get("setup_url") and site["id"] not in self._prepared:
@@ -216,7 +227,7 @@ class BrowserPool:
             self._prepared.discard(site_id)
             self._interactive.add(site_id)
         try:
-            ctx = await self._launch(site_id, headless=False)
+            ctx = await self._launch(site_id, headless=False, proxy=site_proxy(self.settings, site))
             self._record_pages(ctx, site_id)
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             start = (site.get("login") or {}).get("url") or site.get("home") or site["search_url"].split("?")[0]
