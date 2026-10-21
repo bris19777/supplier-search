@@ -36,6 +36,61 @@ def _num_key(value):
     return (0, n * (1024 if m.group(2) == "TB" else 1), value)
 
 
+# Rough performance tiers, so "sort by CPU" puts a Core i3 below an i5 and an i7,
+# with the matching AMD/Apple parts beside them.
+_CPU_TIERS = {
+    "Celeron": 1, "Athlon": 2, "Pentium": 2, "Snapdragon": 5,
+    "Core i3": 3, "Ryzen 3": 3, "Core 3": 3.5,
+    "Core i5": 5, "Ryzen 5": 5, "Apple M1": 5, "Core 5": 5.5,
+    "Core Ultra 5": 6, "Ryzen AI 5": 6, "Apple M2": 6, "Core Ultra X5": 6.5,
+    "Core i7": 7, "Ryzen 7": 7, "Apple M3": 7, "Core 7": 7.5,
+    "Core Ultra 7": 8, "Ryzen AI 7": 8, "Apple M4": 8, "Core Ultra X7": 8.5,
+    "Core i9": 9, "Ryzen 9": 9, "Xeon": 9, "Apple M5": 9,
+    "Core Ultra 9": 10, "Ryzen AI 9": 10, "Core Ultra X9": 10.5,
+}
+
+
+def cpu_rank(value):
+    if value in _CPU_TIERS:
+        return _CPU_TIERS[value]
+    base = re.sub(r"\s*(Pro|Max|Ultra)$", "", value, flags=re.I)  # "M3 Pro" just above "M3"
+    return _CPU_TIERS[base] + 0.5 if base in _CPU_TIERS else None
+
+
+# Workstation RTX (RTX 500 / 1000 / 2000 ... Ada, RTX PRO 4500 ...) roughly next to the
+# consumer card of similar class, as a tier on the same xx50..xx90 scale.
+_PRO_GPU_TIERS = {500: 45, 1000: 50, 2000: 60, 3000: 70, 3500: 72, 4000: 75,
+                  4500: 78, 5000: 80, 6000: 90}
+
+
+def gpu_rank(value):
+    """'RTX 4060Ti' -> tier 60 first, then generation 40, then the Ti/Super/XT step."""
+    m = re.match(r"(\w+)\s+(?:PRO\s+)?(\d{3,4})(\w*)", value)
+    if not m:
+        return None
+    digits = m.group(2)
+    if m.group(1) == "RTX" and int(digits) in _PRO_GPU_TIERS:
+        return _PRO_GPU_TIERS[int(digits)] * 100 + 45
+    tier, gen = int(digits[-2:]), int(digits[:-2])
+    bump = 5 if m.group(3).upper() in ("TI", "SUPER", "XT", "XTX", "GRE") else 0
+    return tier * 100 + gen + bump
+
+
+def _size_rank(value):
+    k = _num_key(value)
+    return k[1] if k[0] == 0 else None
+
+
+# sort key -> (facet that holds the value, value -> comparable number or None)
+SPEC_SORTS = {
+    "cpu": ("cpu", cpu_rank),
+    "screen": ("screen", _size_rank),
+    "ram": ("ram", _size_rank),
+    "storage": ("storage", _size_rank),
+    "gpu": ("gpu", gpu_rank),
+}
+
+
 def _tokens(text):
     return [t for t in norm_title(text).split() if t]
 
@@ -100,8 +155,10 @@ def apply(products, query, f):
         if not counts:
             continue
         selected = set((f.get("facets") or {}).get(key) or [])
-        if key in ("ram", "storage", "screen"):
-            order = sorted(counts, key=_num_key)
+        if key in SPEC_SORTS:
+            # weakest/smallest first, so the list reads like a spec ladder
+            rank = SPEC_SORTS[key][1]
+            order = sorted(counts, key=lambda v: (rank(v) is None, rank(v) or 0, v))
         else:
             order = sorted(counts, key=lambda v: (-counts[v], v))
         facets.append({"key": key, "label": label, "values": [
@@ -110,7 +167,19 @@ def apply(products, query, f):
     basis = f.get("basis")
     sort = f.get("sort") or "relevance"
     no_price = float("inf")
-    if sort == "price_asc":
+    spec, _, direction = sort.rpartition("_")
+    if spec in SPEC_SORTS:
+        # "cpu_asc" / "screen_desc" ...: by the spec, cheapest first within the same
+        # spec; products whose title doesn't state it go last either way
+        facet, rank = SPEC_SORTS[spec]
+        sign = -1 if direction == "desc" else 1
+
+        def spec_key(p):
+            r = rank(p["specs"].get(facet, ""))
+            return (r is None, sign * (r or 0), price_of(p, basis) is None,
+                    price_of(p, basis) or no_price)
+        items.sort(key=spec_key)
+    elif sort == "price_asc":
         items.sort(key=lambda p: (price_of(p, basis) is None, price_of(p, basis) or no_price))
     elif sort == "price_desc":
         items.sort(key=lambda p: (price_of(p, basis) is None, -(price_of(p, basis) or 0)))

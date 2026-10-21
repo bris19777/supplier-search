@@ -65,3 +65,54 @@ def test_group_by_mpn_across_sites():
     assert lenovo["sites"] == 2 and lenovo["best_price"] == 3300 and lenovo["max_price"] == 3500
     assert [o["site"] for o in lenovo["offers"]] == ["b", "a"]
     assert len(groups) == 4
+
+
+def specs_sample():
+    return [
+        prod("a", 'Laptop Core i7 16GB RAM 512GB SSD 14" RTX 4060', 5000),
+        prod("a", 'Laptop Core i3 8GB RAM 256GB SSD 15.6"', 2000),
+        prod("b", 'Laptop Ryzen 5 32GB RAM 1TB SSD 16" RTX 3050', 3500),
+        prod("b", 'Laptop Core Ultra 7 16GB RAM 1TB SSD 13.3" RTX 4060Ti', 6000),
+        prod("c", "Laptop bag", 90),
+        prod("c", 'Laptop Core i5 8GB RAM 512GB SSD 15.6"', 2900),
+        prod("c", 'Laptop Core i5 8GB RAM 512GB SSD 15.6"', 2700),
+    ]
+
+
+def _titles_cpu(items):
+    return [p["specs"].get("cpu") for p in items]
+
+
+def test_sort_by_cpu_tier_then_price_missing_last():
+    items, _, _ = filters.apply(specs_sample(), "laptop", {"sort": "cpu_desc"})
+    assert _titles_cpu(items) == ["Core Ultra 7", "Core i7", "Core i5", "Core i5", "Ryzen 5", "Core i3", None]
+    # Core i5 and Ryzen 5 share a tier, so within it the cheapest comes first
+    i5 = [p["price_inc_vat"] for p in items if p["specs"].get("cpu") == "Core i5"]
+    assert i5 == [2700, 2900]  # cheapest first within the same CPU tier
+    items, _, _ = filters.apply(specs_sample(), "laptop", {"sort": "cpu_asc"})
+    assert _titles_cpu(items)[0] == "Core i3" and _titles_cpu(items)[-1] is None
+
+
+def test_sort_by_screen_ram_storage_gpu():
+    screens = lambda items: [p["specs"].get("screen") for p in items]
+    items, _, _ = filters.apply(specs_sample(), "laptop", {"sort": "screen_asc"})
+    assert screens(items) == ['13.3"', '14"', '15.6"', '15.6"', '15.6"', '16"', None]
+    items, _, _ = filters.apply(specs_sample(), "laptop", {"sort": "storage_desc"})
+    assert [p["specs"].get("storage") for p in items][:2] == ["1TB", "1TB"]
+    items, _, _ = filters.apply(specs_sample(), "laptop", {"sort": "ram_desc"})
+    assert items[0]["specs"]["ram"] == "32GB"
+    items, _, _ = filters.apply(specs_sample(), "laptop", {"sort": "gpu_desc"})
+    assert [p["specs"].get("gpu") for p in items][:3] == ["RTX 4060Ti", "RTX 4060", "RTX 3050"]
+
+
+def test_cpu_facet_listed_by_tier():
+    _, facets, _ = filters.apply(specs_sample(), "laptop", {})
+    cpu = next(f for f in facets if f["key"] == "cpu")
+    assert [v["value"] for v in cpu["values"]] == ["Core i3", "Core i5", "Ryzen 5", "Core i7", "Core Ultra 7"]
+
+
+def test_ranks():
+    assert filters.cpu_rank("Apple M3 Pro") > filters.cpu_rank("Apple M3")
+    assert filters.cpu_rank("Something") is None
+    assert filters.gpu_rank("RTX 4070") > filters.gpu_rank("RTX 3060") > filters.gpu_rank("GTX 1650")
+    assert filters.gpu_rank("RX 7600XT") > filters.gpu_rank("RX 7600")

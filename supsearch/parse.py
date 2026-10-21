@@ -23,8 +23,8 @@ from urllib.parse import quote, urljoin
 from bs4 import BeautifulSoup
 
 from .models import Product
-from .normalize import (detect_brand, extract_specs, parse_price, parse_stock,
-                        with_vat)
+from .normalize import (canonical_brand, detect_brand, extract_specs, parse_price,
+                        parse_stock, with_vat)
 
 FIELDS = ("title", "url", "image", "sku", "mpn", "brand", "category", "price", "stock")
 _ATTR_TAIL = re.compile(r"^(.*?)@([\w:-]+)$")
@@ -145,7 +145,7 @@ def parse_results(content, site, page_url, vat_rate=0.18, rates=None):
             image = quote(urljoin(page_url, image), safe=":/?&=%#,;@+~")
         else:
             image = ""
-        brand = _clean(raw["brand"]) or detect_brand(title)
+        brand = canonical_brand(_clean(raw["brand"])) or detect_brand(title)
         products.append(Product(
             site=site["id"], site_name=site["name"], title=title, url=url,
             image=image, sku=_clean(raw["sku"]), mpn=_clean(raw["mpn"]),
