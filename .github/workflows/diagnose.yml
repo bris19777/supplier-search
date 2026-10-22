@@ -1,0 +1,25 @@
+name: diagnose fly
+
+# Manual check of the running app: machine state, recent startup logs (Tailscale /
+# egress lines) and, if the machine is up, Tailscale's own status.
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Machines
+        run: flyctl status -a "$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)" || true
+      - name: Recent Tailscale / egress log lines
+        run: |
+          APP=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
+          flyctl logs -a "$APP" --no-tail 2>&1 | grep -iE "tailscale|exit node|exit-node|egress|requires mentioning|FAILED|Uvicorn running" | tail -60 || true
+      - name: Tailscale status inside the machine
+        run: |
+          APP=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
+          flyctl ssh console -a "$APP" -C "tailscale --socket=/tmp/tailscaled.sock status" 2>&1 | head -40 || true
