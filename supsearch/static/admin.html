@@ -108,6 +108,7 @@
     </table>
     <div class="row" style="margin-top:12px">
       <button class="primary" id="ixRun">עדכון האינדקס עכשיו</button>
+      <button class="danger" id="ixStop" hidden>עצור עדכון</button>
       <span id="ixStatus" class="hint"></span>
     </div>
     <div class="msg" id="ixMsg"></div>
@@ -277,6 +278,7 @@ async function loadIndex() {
     return `<tr><td><b>${esc(s.name)}</b></td><td>${s.products.toLocaleString("he-IL")}</td><td>${when(s.newest)}</td><td>${esc(prog)}</td></tr>`;
   }).join("");
   $("#ixRun").disabled = st.running;
+  $("#ixStop").hidden = !st.running;
   $("#ixStatus").textContent = st.running ? `מתעדכן… (התחיל ${when(st.started)})`
     : st.finished ? `עדכון אחרון הסתיים ${when(st.finished)} · ${st.last_added >= 0 ? "+" : ""}${st.last_added} מוצרים`
       + (st.errors.length ? ` · ${st.errors.length} שגיאות` : "") : "";
@@ -284,6 +286,10 @@ async function loadIndex() {
   clearTimeout(ixTimer);
   if (st.running) ixTimer = setTimeout(loadIndex, 3000);  // follow the crawl while it runs
 }
+$("#ixStop").onclick = async () => {
+  try { const j = await api("api/admin/index/stop", { method: "POST" }); say($("#ixMsg"), j.message, true); loadIndex(); }
+  catch (e) { say($("#ixMsg"), e.message, false); }
+};
 $("#ixRun").onclick = async () => {
   try { const j = await api("api/admin/index/run", { method: "POST" }); say($("#ixMsg"), j.message, true); loadIndex(); }
   catch (e) { say($("#ixMsg"), e.message, false); }

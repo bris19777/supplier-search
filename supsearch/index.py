@@ -212,6 +212,7 @@ class Crawler:
         self.status = {"running": False, "started": None, "finished": None, "progress": {},
                        "errors": [], "last_added": 0}
         self._task = None
+        self._job = None
 
     def start(self):
         if self.settings["enabled"] and self._task is None:
@@ -234,13 +235,32 @@ class Crawler:
             return False
         before = sum(s["products"] for s in self.index.stats().values())
         self.status.update(running=True, started=time.time(), finished=None, errors=[], progress={})
-        try:
+
+        async def crawl():
             await asyncio.gather(*(self._crawl_site(s) for s in self.agg.enabled_sites(only)))
             await asyncio.to_thread(self.index.prune, float(self.settings["prune_days"]))
+
+        # the crawl is its own task so cancel() stops it whoever started it (button or schedule)
+        self._job = asyncio.create_task(crawl())
+        try:
+            await self._job
+        except asyncio.CancelledError:
+            if not self._job.cancelled():
+                self._job.cancel()
+                raise  # we are being shut down
+            self.status["errors"].append("הופסק ידנית")
         finally:
+            self._job = None
             after = sum(s["products"] for s in self.index.stats().values())
             self.status.update(running=False, finished=time.time(), last_added=after - before)
         return True
+
+    def cancel(self):
+        """Stop a running crawl; what it already collected stays in the index."""
+        if self._job is not None and not self._job.done():
+            self._job.cancel()
+            return True
+        return False
 
     async def _crawl_site(self, site):
         queries = site.get("index_queries") or self.queries

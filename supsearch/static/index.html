@@ -102,6 +102,7 @@
     <h1>חיפוש ספקים</h1>
     <input id="q" type="search" placeholder="שם מוצר, דגם או מק&quot;ט יצרן…" autocomplete="off" autofocus>
     <button class="primary" type="submit" id="go">חפש</button>
+    <button type="button" id="stop" hidden title="עוצר את החיפוש, כולל הסריקה שרצה ברקע באתרי הספקים">עצור</button>
     <select id="source" title="אינדקס: תשובה מיידית מהמוצרים שנאספו (עד כמה שעות אחורה). חי: חיפוש באתרי הספקים עכשיו">
       <option value="auto">מקור: אינדקס (מהיר)</option>
       <option value="live">מקור: חי מהאתרים</option>
@@ -330,24 +331,49 @@ function request(refresh) {
 }
 
 let seq = 0;
+// The search in flight: stopping it aborts the browser's request AND tells the server to
+// cancel the work behind it (scraping the suppliers, reading product pages).
+let current = null;
+function stopSearch() {
+  if (!current) return;
+  const { id, controller } = current;
+  current = null;
+  controller.abort();
+  fetch("api/search/cancel", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ search_id: id }), keepalive: true }).catch(() => {});
+}
+$("#stop").addEventListener("click", () => {
+  stopSearch();
+  ++seq;  // whatever was on its way is no longer wanted
+  $("#count").textContent = "החיפוש הופסק.";
+  $("#go").disabled = false; $("#stop").hidden = true;
+});
+
 async function run(refresh) {
   const body = request(refresh);
   if (!body.query) return;
   if (!body.sites.length) { $("#results").innerHTML = `<div class="card empty">לא נבחר אף ספק.</div>`; return; }
+  stopSearch();  // a new search replaces one still running in the background
   const my = ++seq;
   const isNew = body.query !== state.lastQuery || refresh;
-  $("#go").disabled = true;
+  body.search_id = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  current = { id: body.search_id, controller: new AbortController() };
+  const signal = current.controller.signal;
+  $("#go").disabled = true; $("#stop").hidden = false;
   $("#count").innerHTML = `<span class="spinner"></span> ${isNew ? "מחפש בכל הספקים…" : body.deep ? "קורא מפרט מדפי המוצרים…" : "מסנן…"}`;
   try {
-    const j = await api("api/search", { method: "POST", body: JSON.stringify(body) });
+    const j = await api("api/search", { method: "POST", body: JSON.stringify(body), signal });
     if (my !== seq) return;
     state.lastQuery = body.query;
     history.replaceState(null, "", "#q=" + encodeURIComponent(body.query));
     render(j);
   } catch (e) {
-    if (my === seq) $("#count").textContent = "שגיאה: " + e.message;
+    if (my === seq && e.name !== "AbortError") $("#count").textContent = "שגיאה: " + e.message;
   } finally {
-    if (my === seq) { $("#go").disabled = false; $("#refresh").checked = false; }
+    if (my === seq) {
+      current = null;
+      $("#go").disabled = false; $("#stop").hidden = true; $("#refresh").checked = false;
+    }
   }
 }
 

@@ -58,6 +58,25 @@ def is_local(request):
 def create_app(sites_path=None, credentials_path=None):
     state = {}
     failures = {}  # (ip, username) -> [timestamps]
+    running = {}   # (username, search id) -> the task doing that search, for "stop"
+
+    async def cancellable(user, search_id, coro):
+        """Run a search as its own task, so the user's "stop" can cancel the work behind it
+        (scraping, product pages, the AI conversation) and not just the browser's wait."""
+        if not search_id:
+            return await coro
+        key = (user["username"], search_id)
+        task = asyncio.create_task(coro)
+        running[key] = task
+        try:
+            return await task
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise HTTPException(499, "החיפוש הופסק")
+            task.cancel()  # the request itself went away (shutdown): take the work with it
+            raise
+        finally:
+            running.pop(key, None)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -367,6 +386,7 @@ def create_app(sites_path=None, credentials_path=None):
         sort: str = "relevance"
         deep: bool = False          # read missing specs from the product pages (slower)
         source: str = "auto"        # auto | index | live  (see index.find)
+        search_id: str = Field("", max_length=64)  # lets the user stop this search
 
     class CaptureRequest(BaseModel):
         query: str
@@ -380,6 +400,7 @@ def create_app(sites_path=None, credentials_path=None):
 
     class AIRequest(BaseModel):
         query: str
+        search_id: str = Field("", max_length=64)
         in_stock_only: bool = False  # out-of-stock never appear; this also drops unknown stock
         sites: list[str] = Field(default_factory=list)
 
@@ -396,8 +417,8 @@ def create_app(sites_path=None, credentials_path=None):
         if not key:
             raise HTTPException(400, "חיפוש AI לא הוגדר - מנהל צריך לשמור מפתח API בעמוד הניהול")
         try:
-            return await ai.ai_search(state["agg"], key, req.query, req.in_stock_only,
-                                      set(req.sites) or None, index=state["index"])
+            return await cancellable(user, req.search_id, ai.ai_search(
+                state["agg"], key, req.query, req.in_stock_only, set(req.sites) or None, index=state["index"]))
         except ai.AIError as e:
             raise HTTPException(502, str(e))
 
@@ -425,6 +446,12 @@ def create_app(sites_path=None, credentials_path=None):
         state["tasks"].add(task)
         task.add_done_callback(state["tasks"].discard)
         return {"ok": True, "message": "עדכון האינדקס התחיל ברקע"}
+
+    @app.post("/api/admin/index/stop")
+    async def index_stop(admin=Depends(require_admin)):
+        if not state["crawler"].cancel():
+            return {"ok": True, "message": "אין עדכון שרץ כעת"}
+        return {"ok": True, "message": "העדכון הופסק. מה שנאסף עד עכשיו נשאר באינדקס"}
 
     @app.get("/api/admin/ai-key")
     async def ai_key_status(admin=Depends(require_admin)):
@@ -464,11 +491,24 @@ def create_app(sites_path=None, credentials_path=None):
             "notes": s.get("notes", ""),
         } for s in agg.sites]
 
+    class CancelRequest(BaseModel):
+        search_id: str = Field(max_length=64)
+
+    @app.post("/api/search/cancel")
+    async def cancel_search(req: CancelRequest, user=Depends(require_user)):
+        task = running.get((user["username"], req.search_id))  # only the user's own searches
+        if task is not None:
+            task.cancel()
+        return {"cancelled": task is not None}
+
     @app.post("/api/search")
     async def search(req: SearchRequest, user=Depends(require_user)):
-        query = req.query.strip()
-        if not query:
+        if not req.query.strip():
             raise HTTPException(400, "יש להזין מילת חיפוש")
+        return await cancellable(user, req.search_id, run_search(req))
+
+    async def run_search(req):
+        query = req.query.strip()
         agg = state["agg"]
         max_age = float(agg.settings["index"].get("max_age_days", 3))
         results = await find(agg, state["index"], query, only=set(req.sites) or None,
