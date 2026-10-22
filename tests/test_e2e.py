@@ -161,3 +161,27 @@ def test_info_reports_egress(monkeypatch, client):
     monkeypatch.setenv("EGRESS", "office:office-pc")
     info = client.get("/api/info").json()
     assert (info["egress"], info["egress_detail"]) == ("office", "office-pc")
+
+
+def test_http_retries_a_dead_pooled_connection():
+    """After a Fly suspend/resume the first request on an old connection fails."""
+    import asyncio
+    import httpx
+    from supsearch.fetch import HttpFetcher
+
+    calls = []
+
+    def handler(request):
+        calls.append(request.url)
+        if len(calls) == 1:
+            raise httpx.ReadError("connection reset by peer")
+        return httpx.Response(200, text="ok")
+
+    async def go():
+        f = HttpFetcher()
+        site = {"id": "s"}
+        f._clients["s"] = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        assert await f.get(site, "https://s.test/x", 5) == "ok"
+        await f.close()
+    asyncio.run(go())
+    assert len(calls) == 2

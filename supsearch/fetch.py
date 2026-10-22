@@ -74,7 +74,12 @@ class HttpFetcher:
         return client
 
     async def get(self, site, url, timeout):
-        r = await self._client(site, timeout).get(url)
+        try:
+            r = await self._client(site, timeout).get(url)
+        except httpx.TransportError:
+            # after a Fly suspend/resume the pooled connections are dead but look alive;
+            # one retry goes out on a fresh connection
+            r = await self._client(site, timeout).get(url)
         if r.status_code in (401, 403) and "cf-mitigated" in r.headers:
             raise RuntimeError("חסום ע\"י Cloudflare - יש להעביר את האתר ל-fetch: browser")
         r.raise_for_status()
