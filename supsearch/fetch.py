@@ -16,6 +16,7 @@ open_interactive(); afterwards the headless searches reuse that session.
 
 import asyncio
 import os
+import re
 import ssl
 
 import httpx
@@ -37,6 +38,15 @@ CHALLENGE_TITLES = ("just a moment", "attention required", "checking your browse
 
 # firewall rejection pages (F5 "Request Rejected" and the like); retried, then reported
 BLOCKED_TITLES = ("request rejected", "access denied", "error page", "403 forbidden")
+
+
+def solve_sum(text):
+    """The arithmetic question some login forms ask ("8 + 2 = ?") -> 10; None if it isn't one."""
+    m = re.search(r"(\d+)\s*([+\-xX×*])\s*(\d+)", text or "")
+    if not m:
+        return None
+    a, op, b = int(m.group(1)), m.group(2), int(m.group(3))
+    return a + b if op == "+" else a - b if op == "-" else a * b
 
 
 class NeedsLogin(Exception):
@@ -99,6 +109,7 @@ class BrowserPool:
         self._locks = {}
         self._interactive = set()
         self._prepared = set()  # sites whose setup_url was visited in the current context
+        self._pdf_browser = None
 
     async def _playwright(self):
         if self._pw is None:
@@ -208,6 +219,11 @@ class BrowserPool:
         await page.wait_for_selector(login["username"], timeout=timeout * 1000 // 2)
         await page.fill(login["username"], str(credentials.get("username", "")))
         await page.fill(login["password"], str(credentials.get("password", "")))
+        captcha = login.get("captcha")
+        if captcha and await page.query_selector(captcha["question"]):
+            answer = solve_sum(await page.inner_text(captcha["question"]))
+            if answer is not None:
+                await page.fill(captcha["answer"], str(answer))
         if login.get("submit") and await page.query_selector(login["submit"]):
             await page.click(login["submit"])
         else:
@@ -307,6 +323,32 @@ class BrowserPool:
             watch(p)
         ctx.on("page", watch)
 
+    async def render_pdf(self, html, timeout=30):
+        """Print an HTML document to an A4 PDF with a plain headless browser of its own
+        (no supplier profile, no proxy)."""
+        lock = self._locks.setdefault("__pdf__", asyncio.Lock())
+        async with lock:
+            if self._pdf_browser is None:
+                pw = await self._playwright()
+                exe = os.environ.get("BROWSER_EXECUTABLE")
+                if exe:
+                    self._pdf_browser = await pw.chromium.launch(executable_path=exe)
+                else:
+                    try:
+                        self._pdf_browser = await pw.chromium.launch(channel=self.settings.get("channel") or None)
+                    except Exception:
+                        self._pdf_browser = await pw.chromium.launch()
+        page = await self._pdf_browser.new_page()
+        try:
+            try:
+                await page.set_content(html, wait_until="load", timeout=timeout * 1000)
+            except Exception:
+                pass  # a slow product image must not block the quote; print what loaded
+            return await page.pdf(format="A4", print_background=True,
+                                  margin={"top": "14mm", "bottom": "14mm", "left": "12mm", "right": "12mm"})
+        finally:
+            await page.close()
+
     def is_interactive(self, site_id):
         return site_id in self._interactive
 
@@ -317,6 +359,9 @@ class BrowserPool:
             except Exception:
                 pass
         self._contexts.clear()
+        if self._pdf_browser is not None:
+            await self._pdf_browser.close()
+            self._pdf_browser = None
         if self._pw is not None:
             await self._pw.stop()
             self._pw = None

@@ -77,6 +77,27 @@
   </section>
 
   <section>
+    <h2>פרטי העסק להצעות מחיר</h2>
+    <p class="hint">הפרטים האלה מופיעים בראש כל הצעת מחיר שמפיקים מתוצאות החיפוש. "תוספת" היא אחוז
+      הרווח שמוצע כברירת מחדל מעל מחיר העלות, ואפשר לשנות אותה בכל הצעה.</p>
+    <form id="qs" class="qs">
+      <div class="row"><input id="qsName" placeholder="שם העסק"><input id="qsId" placeholder="ח.פ / ע.מ"></div>
+      <div class="row"><input id="qsPhone" placeholder="טלפון"><input id="qsEmail" placeholder="מייל" dir="ltr"></div>
+      <div class="row"><input id="qsAddress" placeholder="כתובת"></div>
+      <div class="row"><input id="qsFooter" placeholder="שורה בתחתית ההצעה (למשל: תנאי תשלום, פרטי בנק)"></div>
+      <div class="row">
+        <label>תוספת ברירת מחדל % <input id="qsMarkup" type="number" min="0" step="0.5" style="width:90px"></label>
+        <label>תוקף ההצעה (ימים) <input id="qsValid" type="number" min="1" style="width:90px"></label>
+        <label>לוגו <input id="qsLogo" type="file" accept="image/png,image/jpeg,image/svg+xml"></label>
+        <img id="qsLogoPrev" alt="" style="max-height:40px" hidden>
+        <button type="button" id="qsLogoDel" hidden>הסרת לוגו</button>
+      </div>
+      <div class="row"><button class="primary">שמירה</button></div>
+    </form>
+    <div class="msg" id="qsMsg"></div>
+  </section>
+
+  <section>
     <h2>אינדקס מקומי</h2>
     <p class="hint">המערכת שומרת אצלה את המוצרים של כל הספקים, כך שחיפוש עונה מיד במקום לחכות לאתרים.
       האינדקס מתעדכן מעצמו ברקע (<span id="ixEvery"></span>), וגם מכל חיפוש חי. מוצר שלא נראה כמה ימים
@@ -268,6 +289,38 @@ $("#ixRun").onclick = async () => {
   catch (e) { say($("#ixMsg"), e.message, false); }
 };
 
+let qsLogo = "";
+async function loadQuoteSettings() {
+  const q = await api("api/quote/settings");
+  $("#qsName").value = q.business_name; $("#qsId").value = q.business_id; $("#qsPhone").value = q.phone;
+  $("#qsEmail").value = q.email; $("#qsAddress").value = q.address; $("#qsFooter").value = q.footer;
+  $("#qsMarkup").value = q.markup_percent; $("#qsValid").value = q.valid_days;
+  qsLogo = q.logo || ""; showLogo();
+}
+function showLogo() {
+  $("#qsLogoPrev").hidden = $("#qsLogoDel").hidden = !qsLogo;
+  if (qsLogo) $("#qsLogoPrev").src = qsLogo;
+}
+$("#qsLogo").addEventListener("change", () => {
+  const f = $("#qsLogo").files[0]; if (!f) return;
+  if (f.size > 300 * 1024) { say($("#qsMsg"), "הלוגו גדול מדי (עד 300KB)", false); return; }
+  const rd = new FileReader();
+  rd.onload = () => { qsLogo = rd.result; showLogo(); };
+  rd.readAsDataURL(f);
+});
+$("#qsLogoDel").onclick = () => { qsLogo = ""; $("#qsLogo").value = ""; showLogo(); };
+$("#qs").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await api("api/admin/quote-settings", { method: "PUT", body: JSON.stringify({
+      business_name: $("#qsName").value, business_id: $("#qsId").value, phone: $("#qsPhone").value,
+      email: $("#qsEmail").value, address: $("#qsAddress").value, footer: $("#qsFooter").value,
+      markup_percent: Number($("#qsMarkup").value) || 0, valid_days: Number($("#qsValid").value) || 14,
+      logo: qsLogo }) });
+    say($("#qsMsg"), "נשמר", true);
+  } catch (ex) { say($("#qsMsg"), ex.message, false); }
+});
+
 async function loadAiKey() {
   const j = await api("api/admin/ai-key");
   const st = $("#aiStatus");
@@ -295,7 +348,7 @@ $("#aiDel").onclick = async () => {
   catch (e) { say($("#aiMsg"), e.message, false); }
 };
 
-loadMe().then(() => Promise.all([loadAiKey(), loadIndex(), loadSuppliers(), loadUsers()])).catch(() => {});
+loadMe().then(() => Promise.all([loadAiKey(), loadQuoteSettings(), loadIndex(), loadSuppliers(), loadUsers()])).catch(() => {});
 </script>
 </body>
 </html>

@@ -247,6 +247,48 @@ class Store:
                 self._write("suppliers.json", data)
 
 
+    # -- per-user favourite suppliers ----------------------------------------------
+
+    def get_favorites(self, username):
+        u = self._read("users.json").get(username)
+        return list(u.get("favorites", [])) if u else []
+
+    def set_favorites(self, username, sites):
+        with self._lock:
+            users = self._read("users.json")
+            if username not in users:
+                raise StoreError("משתמש לא קיים")
+            users[username]["favorites"] = list(dict.fromkeys(sites))  # unique, order kept
+            self._write("users.json", users)
+
+    # -- quotes: business details on the PDF, and the running quote number ----------
+
+    QUOTE_DEFAULTS = {"business_name": "", "business_id": "", "phone": "", "email": "", "address": "",
+                      "logo": "", "footer": "", "markup_percent": 15.0, "valid_days": 14}
+
+    def quote_settings(self):
+        return {**self.QUOTE_DEFAULTS, **self._read("quote_settings.json")}
+
+    def set_quote_settings(self, values):
+        clean = {k: values[k] for k in self.QUOTE_DEFAULTS if k in values}
+        if len(clean.get("logo", "")) > 400_000:
+            raise StoreError("הלוגו גדול מדי (עד 300KB)")
+        if clean.get("logo") and not clean["logo"].startswith("data:image/"):
+            raise StoreError("הלוגו חייב להיות תמונה")
+        with self._lock:
+            self._write("quote_settings.json", {**self.quote_settings(), **clean})
+
+    def next_quote(self, by, customer, total):
+        """Reserve the next quote number and keep a short log of issued quotes."""
+        with self._lock:
+            data = self._read("quotes.json")
+            number = int(data.get("next", 1001))
+            log = data.get("log", [])[-499:]
+            log.append({"number": number, "by": by, "customer": customer, "total": total,
+                        "at": time.strftime("%Y-%m-%d %H:%M")})
+            self._write("quotes.json", {"next": number + 1, "log": log})
+        return number
+
     # -- app secrets (the Anthropic API key for AI search) ------------------------
 
     def set_secret(self, name, value, by):

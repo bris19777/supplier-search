@@ -104,7 +104,7 @@ def canonical_brand(name):
     known = detect_brand(name)
     if known:
         return known
-    return name.title() if name.isupper() and len(name) > 3 else name
+    return name.title() if (name.isupper() or name.islower()) and len(name) > 3 else name
 
 
 def detect_brand(title):
@@ -134,7 +134,8 @@ def _cpu(t):
     m = re.search(r"\b(?:Core\s*)?i([3579])\b", t, re.I)
     if m:
         return f"Core i{m.group(1)}"
-    m = re.search(r"\bCore\s*([3579])\b", t, re.I)  # Intel Core 3/5/7 (Series 1/2, no "i")
+    m = re.search(r"\bCore\s*([3579])\b", t, re.I) or \
+        re.search(r"\bC([3579])-\d{3}", t)  # Intel Core 3/5/7 (Series 1/2, no "i"); "C5-210H"
     if m:
         return f"Core {m.group(1)}"
     m = re.search(r"\bRyzen[\s-]*(AI\s*)?([3579])\b", t, re.I) or \
@@ -159,7 +160,7 @@ def _is_monitor(t):
 
 
 def _screen(t):
-    m = re.search(r"(?<![\d.])([1-8][0-9])(?:\.(\d))?\s*(?:\"|''|”|inch|אינץ'?|אינטש)", t, re.I)
+    m = re.search(r"(?<![\d.])([1-8][0-9])(?:\.(\d))?\s*(?:\"|''|”|″|inch|אינץ'?|אינטש)", t, re.I)
     if m:
         return m.group(1) + ("." + m.group(2) if m.group(2) else "") + '"'
     # spec-list titles give a bare size between pipes: "U7-355|24G|512G|16|DOS"
@@ -194,10 +195,11 @@ def _os(t):
     if m:
         edition = {"P": " Pro", "PRO": " Pro", "H": " Home", "HOME": " Home"}.get((m.group(2) or "").upper(), "")
         return f"Windows {m.group(1)}{edition}"
-    m = re.search(r"\b(FreeDOS|DOS|No\s*OS|Linux|Chrome\s*OS|macOS)\b", t, re.I)
+    m = re.search(r"\b(FreeDOS|DOS|No\s*OS|Linux|Chrome\s*OS|macOS)\b", t, re.I) or \
+        (re.search(r"\b(FD)\b", t) if _cpu(t) else None)  # "FD" = FreeDOS in computer titles
     if m:
         name = m.group(1)
-        if name.upper().replace(" ", "") in ("DOS", "FREEDOS", "NOOS"):
+        if name.upper().replace(" ", "") in ("DOS", "FREEDOS", "NOOS", "FD"):
             return "ללא מערכת הפעלה"
         return {"chromeos": "Chrome OS", "macos": "macOS"}.get(name.lower().replace(" ", ""), name.title())
     return None
@@ -214,7 +216,7 @@ def extract_specs(title):
         specs["ram"] = f"{int(m.group(1))}GB"
 
     m = re.search(r"\b(\d+(?:\.\d+)?)\s*(TB|GB|T)\s*(?:NVMe\s*|M\.2\s*|PCIe\s*)*(SSD|HDD|NVMe|eMMC)\b", t, re.I) or \
-        re.search(r"\b(SSD|HDD|NVMe)\s*(\d+(?:\.\d+)?)\s*(TB|GB|T)\b", t, re.I) or \
+        re.search(r"\b(SSD|HDD|NVMe)\s*(\d+(?:\.\d+)?)\s*(TB|GB|T|G)\b", t, re.I) or \
         re.search(r"\b(128|256|512)\s*(NVMe|SSD)\b", t, re.I)  # "512NVME": the unit left out
     if m:
         g = m.groups()
@@ -228,6 +230,10 @@ def extract_specs(title):
     found = re.findall(r"(?<![\w.])(\d+(?:\.\d+)?)\s*(TB|GB)(?![a-z])", t, re.I)
     # "|24G|512G|": a unit without the B, trusted only as a pipe-delimited spec field
     found += re.findall(r"(?:^|\|)\s*(\d+)\s*(G|T)\s*(?=\||$)", t)
+    if not found and _cpu(t):
+        # a computer title written "i5-13420H 16G D5 512G": bare G/T words count too
+        # ("4G LTE" / "5G" are modems, not memory)
+        found = re.findall(r"(?<![\w.])(\d+)(G|T)(?![\w.])(?!\s*(?:LTE|5G|Wi))", t)
     sizes = [(float(n) * (1024 if u.upper().startswith("T") else 1), _size(n, u))
              for n, u in found]
     if "storage" not in specs and len(sizes) >= 2:

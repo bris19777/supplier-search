@@ -19,10 +19,10 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from . import ai, config, filters
+from . import ai, config, filters, quote
 from .index import Crawler, Index, find
 from .aggregator import Aggregator, page_urls
 from .config import load_credentials, load_sites
@@ -159,7 +159,78 @@ def create_app(sites_path=None, credentials_path=None):
 
     @app.get("/api/me")
     async def me(user=Depends(require_user)):
-        return {"username": user["username"], "role": user["role"], "open": bool(user.get("open"))}
+        favorites = [] if user.get("open") else state["store"].get_favorites(user["username"])
+        return {"username": user["username"], "role": user["role"], "open": bool(user.get("open")),
+                "favorites": favorites}
+
+    class Favorites(BaseModel):
+        sites: list[str]
+
+    @app.put("/api/me/favorites")
+    async def set_favorites(req: Favorites, user=Depends(require_user)):
+        if user.get("open"):
+            raise HTTPException(400, "ספקים מועדפים נשמרים למשתמש - צריך קודם ליצור משתמשים")
+        known = {s["id"] for s in state["agg"].sites}
+        state["store"].set_favorites(user["username"], [s for s in req.sites if s in known])
+        return {"favorites": state["store"].get_favorites(user["username"])}
+
+    # -- price quotes (PDF) -----------------------------------------------------------
+
+    class QuoteItem(BaseModel):
+        title: str = Field(min_length=1, max_length=300)
+        mpn: str = Field("", max_length=80)
+        image: str = Field("", max_length=1000)
+        qty: float = Field(gt=0, le=10000)
+        unit_price: float = Field(ge=0, le=10_000_000)  # selling price per unit, before VAT
+
+    class QuoteRequest(BaseModel):
+        items: list[QuoteItem] = Field(min_length=1, max_length=50)
+        customer: str = Field("", max_length=120)
+        customer_contact: str = Field("", max_length=200)
+        notes: str = Field("", max_length=1000)
+        show_images: bool = True
+
+    class QuoteSettings(BaseModel):
+        business_name: str = Field("", max_length=120)
+        business_id: str = Field("", max_length=40)
+        phone: str = Field("", max_length=60)
+        email: str = Field("", max_length=120)
+        address: str = Field("", max_length=200)
+        logo: str = ""  # data:image/... URL
+        footer: str = Field("", max_length=300)
+        markup_percent: float = Field(15.0, ge=0, le=500)
+        valid_days: int = Field(14, ge=1, le=365)
+
+    @app.get("/api/quote/settings")
+    async def quote_settings(user=Depends(require_user)):
+        return state["store"].quote_settings()
+
+    @app.put("/api/admin/quote-settings")
+    async def save_quote_settings(req: QuoteSettings, admin=Depends(require_admin)):
+        try:
+            state["store"].set_quote_settings(req.model_dump())
+        except StoreError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @app.post("/api/quote/pdf")
+    async def quote_pdf(req: QuoteRequest, user=Depends(require_user)):
+        items = []
+        for it in req.items:
+            image = it.image if it.image.startswith(("https://", "http://")) else ""  # never file:// etc.
+            items.append({**it.model_dump(), "image": image})
+        store, agg = state["store"], state["agg"]
+        vat_rate = float(agg.settings.get("vat_rate", 0.18))
+        _, _, total = quote.totals(items, vat_rate)
+        number = store.next_quote(user["username"] or "admin", req.customer, total)
+        page = quote.quote_html(store.quote_settings(), number, items, req.customer, req.customer_contact,
+                                req.notes, req.show_images, vat_rate)
+        try:
+            pdf = await agg.browser.render_pdf(page)
+        except Exception as e:
+            raise HTTPException(502, f"יצירת ה-PDF נכשלה: {type(e).__name__}"[:200])
+        return Response(pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="quote-{number}.pdf"'})
 
     class PasswordChange(BaseModel):
         current: str

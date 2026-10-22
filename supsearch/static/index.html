@@ -64,6 +64,22 @@
   .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; }
   @keyframes spin { to { transform: rotate(360deg); } }
   #filtersToggle { display: none; }
+  .star { border: 0; background: none; padding: 0 2px; font-size: 16px; line-height: 1; color: #c9a227; cursor: pointer; }
+  .favbar { display: inline-flex; gap: 6px; margin-inline-end: 6px; }
+  .favbar button { padding: 3px 10px; font-size: 13px; border-radius: 999px; }
+  .qbtn { margin-top: 6px; padding: 3px 10px; font-size: 12px; }
+  dialog { border: 1px solid var(--line); border-radius: 12px; padding: 0; width: min(520px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(20, 25, 40, .35); }
+  dialog form { padding: 18px; display: grid; gap: 10px; }
+  dialog h3 { margin: 0; font-size: 16px; }
+  dialog .ptitle { color: var(--muted); font-size: 13px; }
+  dialog label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  dialog input, dialog textarea { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); width: 100%; min-width: 0; }
+  dialog input[type=checkbox] { width: auto; }
+  dialog .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  dialog .totals { background: #fafbfc; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  dialog .actions { display: flex; gap: 8px; justify-content: flex-start; }
+  dialog .cost { font-size: 12px; color: var(--muted); }
   .userbar { display: inline-flex; gap: 10px; align-items: center; margin-inline-start: auto; color: var(--muted); }
   .userbar a, .userbar button.link { color: var(--accent); text-decoration: none; background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
   @media (max-width: 860px) {
@@ -142,6 +158,29 @@
   </section>
 </main>
 
+<dialog id="quoteDlg">
+  <form method="dialog" id="quoteForm">
+    <h3>הצעת מחיר</h3>
+    <div class="ptitle" id="qTitle"></div>
+    <label>לקוח <input id="qCustomer" maxlength="120" placeholder="שם הלקוח או החברה"></label>
+    <label>פרטי קשר <input id="qContact" maxlength="200" placeholder="טלפון / מייל (לא חובה)"></label>
+    <div class="grid3">
+      <label>כמות <input id="qQty" type="number" min="1" step="1" value="1"></label>
+      <label>תוספת % <input id="qMarkup" type="number" min="0" step="0.5"></label>
+      <label>מחיר ליחידה (לפני מע"מ) <input id="qPrice" type="number" min="0" step="0.01" required></label>
+    </div>
+    <div class="cost" id="qCost"></div>
+    <label>הערות <textarea id="qNotes" rows="2" maxlength="1000" placeholder="למשל: כולל התקנה, אחריות 3 שנים"></textarea></label>
+    <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qImage" checked> להציג תמונת מוצר</label>
+    <div class="totals" id="qTotals"></div>
+    <div class="actions">
+      <button type="submit" class="primary" id="qGo" value="go">הורדת PDF</button>
+      <button type="button" id="qCancel">ביטול</button>
+    </div>
+    <div class="cost">בהצעה לא מופיעים שם הספק ומחיר העלות.</div>
+  </form>
+</dialog>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const state = { view: "list", basis: "inc", facets: {}, sites: [], disabled: new Set(), expanded: new Set(), lastQuery: "" };
@@ -158,6 +197,8 @@ async function api(path, opts = {}) {
 
 async function loadMe() {
   const me = await api("api/me");
+  state.me = me;
+  state.favorites = new Set(me.favorites || []);
   const bar = $("#userbar");
   if (me.open) {
     bar.innerHTML = `<a href="admin" title="עדיין אין משתמשים - המערכת פתוחה לכולם">הגדרת משתמשים</a>`;
@@ -217,7 +258,11 @@ async function loadSites() {
 
 function renderSites(results) {
   const byId = Object.fromEntries((results || []).map(r => [r.site, r]));
-  $("#sites").innerHTML = state.sites.map(s => {
+  const favs = state.favorites || new Set();
+  const canFav = state.me && !state.me.open;
+  const ordered = [...state.sites].sort((a, b) => (favs.has(b.id) - favs.has(a.id)) || (b.enabled - a.enabled));
+  const picks = favs.size ? `<span class="favbar"><button type="button" data-pick="fav">★ רק מועדפים</button><button type="button" data-pick="all">כל הספקים</button></span>` : "";
+  $("#sites").innerHTML = picks + ordered.map(s => {
     if (!s.enabled) {
       return `<span class="chip off" title="${esc(s.notes || "")}">${esc(s.name)} · טרם הוגדר${s.fetch === "browser" && s.can_open_window ? ` <button type="button" data-login="${esc(s.id)}" title="פותח את האתר בחלון גלוי ושומר כל דף שנפתח, כדי להגדיר את האתר">פתח והקלט</button>` : ""}</span>`;
     }
@@ -233,7 +278,8 @@ function renderSites(results) {
     }
     const title = esc((r && r.error) || s.notes || "");
     const loginBtn = s.fetch === "browser" && s.can_open_window ? `<button type="button" data-login="${esc(s.id)}" title="פתיחת חלון דפדפן במחשב השרת להתחברות ידנית">התחברות</button>` : "";
-    return `<span class="${cls}" title="${title}"><label><input type="checkbox" data-site="${esc(s.id)}" ${off ? "" : "checked"}> ${esc(s.name)}</label>${info ? `<span>${esc(info)}</span>` : ""}${loginBtn}</span>`;
+    const star = canFav ? `<button type="button" class="star" data-fav="${esc(s.id)}" title="${favs.has(s.id) ? "הסרה מהמועדפים" : "הוספה לספקים המועדפים שלי"}">${favs.has(s.id) ? "★" : "☆"}</button>` : "";
+    return `<span class="${cls}" title="${title}">${star}<label><input type="checkbox" data-site="${esc(s.id)}" ${off ? "" : "checked"}> ${esc(s.name)}</label>${info ? `<span>${esc(info)}</span>` : ""}${loginBtn}</span>`;
   }).join("");
 }
 
@@ -242,7 +288,26 @@ $("#sites").addEventListener("change", e => {
   e.target.checked ? state.disabled.delete(id) : state.disabled.add(id);
   savePrefs(); run(false);
 });
+function pickFavorites() {
+  state.disabled = new Set(state.sites.filter(s => !state.favorites.has(s.id)).map(s => s.id));
+}
 $("#sites").addEventListener("click", async e => {
+  const fav = e.target.dataset.fav, pick = e.target.dataset.pick;
+  if (fav) {
+    const next = new Set(state.favorites);
+    next.has(fav) ? next.delete(fav) : next.add(fav);
+    try {
+      const j = await api("api/me/favorites", { method: "PUT", body: JSON.stringify({ sites: [...next] }) });
+      state.favorites = new Set(j.favorites);
+    } catch (ex) { alert(ex.message); }
+    renderSites(state.lastSites);
+    return;
+  }
+  if (pick) {
+    pick === "fav" ? pickFavorites() : (state.disabled = new Set());
+    savePrefs(); renderSites(state.lastSites); run(false);
+    return;
+  }
   const id = e.target.dataset.login; if (!id) return;
   try {
     const j = await api(`api/sites/${encodeURIComponent(id)}/login-window`, { method: "POST" });
@@ -297,9 +362,15 @@ function stockTag(p) {
   if (p.in_stock === false) return `<span class="tag out">${esc(/^\d*$/.test(p.stock_text || "") ? "לא במלאי" : p.stock_text)}</span>`;
   return `<span class="tag unk">מלאי לא ידוע</span>`;
 }
+function quoteBtn(p) {
+  state.quoteItems.push(p);
+  return `<button type="button" class="qbtn" data-quote="${state.quoteItems.length - 1}" title="הפקת הצעת מחיר ללקוח (PDF)">הצעת מחיר</button>`;
+}
 function img(src) { return src ? `<img src="${esc(safeUrl(src))}" loading="lazy" alt="" referrerpolicy="no-referrer">` : `<div class="ph"></div>`; }
 
 function render(j) {
+  state.lastSites = j.sites;
+  state.quoteItems = [];
   renderSites(j.sites);
   const failed = j.sites.filter(s => s.error && !s.needs_login).length;
   const guests = j.sites.filter(s => s.needs_login).length;
@@ -325,7 +396,7 @@ function render(j) {
         <table class="offers">${g.offers.map((o, i) => `<tr class="${i === 0 && g.sites > 1 ? "best" : ""}">
           <td><b>${esc(o.site_name)}</b></td>
           <td><a class="title" href="${esc(safeUrl(o.url))}" target="_blank" rel="noopener">${esc(o.title)}</a></td>
-          <td>${stockTag(o)}</td><td class="price">${priceBlock(o)}</td></tr>`).join("")}</table>
+          <td>${stockTag(o)}</td><td class="price">${priceBlock(o)}<br>${quoteBtn(o)}</td></tr>`).join("")}</table>
       </div>`;
     }).join("");
     return;
@@ -339,7 +410,7 @@ function render(j) {
           ${p.sku ? `<span>מק"ט: ${esc(p.sku)}</span>` : ""}
           ${p.category ? `<span>${esc(p.category)}</span>` : ""}
           ${p.deep_specs && p.deep_specs.length ? `<span class="tag" title="נקרא מדף המוצר בחיפוש מעמיק">מפרט מדף המוצר</span>` : ""}</div></div>
-      <div class="price">${priceBlock(p)}</div></div>`).join("") + `</div>`;
+      <div class="price">${priceBlock(p)}<br>${quoteBtn(p)}</div></div>`).join("") + `</div>`;
 }
 
 const FACET_LIMIT = 8;
@@ -404,11 +475,69 @@ async function loadInfo() {
   } catch (e) {}
 }
 
+// -- price quote dialog --------------------------------------------------------------
+let quoteSettings = null, quoteProduct = null;
+const r2 = (v) => Math.round(v * 100) / 100;
+function quoteTotals() {
+  const qty = Number($("#qQty").value) || 0, unit = Number($("#qPrice").value) || 0;
+  const sub = r2(qty * unit), vat = r2(sub * 0.18);
+  $("#qTotals").innerHTML = `לפני מע"מ: <b>${money(sub)}</b> · מע"מ: ${money(vat)} · סה"כ: <b>${money(r2(sub + vat))}</b>`;
+}
+function priceFromMarkup() {
+  const cost = quoteProduct.price_ex_vat;
+  if (cost != null) $("#qPrice").value = r2(cost * (1 + (Number($("#qMarkup").value) || 0) / 100));
+  quoteTotals();
+}
+$("#results").addEventListener("click", async e => {
+  const i = e.target.dataset.quote; if (i === undefined) return;
+  quoteProduct = state.quoteItems[Number(i)];
+  if (!quoteSettings) { try { quoteSettings = await api("api/quote/settings"); } catch (ex) { quoteSettings = { markup_percent: 15 }; } }
+  $("#qTitle").textContent = quoteProduct.title;
+  $("#qMarkup").value = quoteSettings.markup_percent;
+  $("#qQty").value = 1;
+  $("#qCost").textContent = quoteProduct.price_ex_vat != null
+    ? `עלות אצל ${quoteProduct.site_name}: ${money(quoteProduct.price_ex_vat)} לפני מע"מ`
+    : "אין מחיר עלות (הספק לא מחובר) - יש להזין מחיר ליחידה";
+  $("#qPrice").value = "";
+  priceFromMarkup();
+  $("#quoteDlg").showModal();
+});
+$("#qMarkup").addEventListener("input", priceFromMarkup);
+["#qQty", "#qPrice"].forEach(id => $(id).addEventListener("input", quoteTotals));
+$("#qCancel").onclick = () => $("#quoteDlg").close();
+$("#quoteForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const btn = $("#qGo"); btn.disabled = true; btn.textContent = "מכין PDF…";
+  try {
+    const r = await fetch("api/quote/pdf", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ customer: $("#qCustomer").value, customer_contact: $("#qContact").value,
+        notes: $("#qNotes").value, show_images: $("#qImage").checked,
+        items: [{ title: quoteProduct.title, mpn: quoteProduct.mpn || "", image: quoteProduct.image || "",
+                  qty: Number($("#qQty").value), unit_price: Number($("#qPrice").value) }] }) });
+    if (r.status === 401) { location.href = "login"; return; }
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail ? (typeof j.detail === "string" ? j.detail : "יש לבדוק את השדות") : r.statusText); }
+    const name = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+    const url = URL.createObjectURL(await r.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: name ? name[1] : "quote.pdf" });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    $("#quoteDlg").close();
+  } catch (ex) {
+    alert(ex.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "הורדת PDF";
+  }
+});
+
 loadPrefs();
-loadMe().catch(() => {}).then(loadInfo);  // the AI link goes into the user bar loadMe draws
+const meReady = loadMe().catch(() => {});
+meReady.then(loadInfo);  // the AI link goes into the user bar loadMe draws
 segment("#basis", "basis");
 segment("#view", "view");
-loadSites().then(() => {
+Promise.all([meReady, loadSites()]).then(() => {
+  // every visit starts with the user's favourite suppliers selected
+  if (state.favorites && state.favorites.size) pickFavorites();
+  renderSites(null);
   const m = location.hash.match(/q=([^&]+)/);
   if (m) { $("#q").value = decodeURIComponent(m[1]); run(false); }
 });

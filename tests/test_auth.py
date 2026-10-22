@@ -115,7 +115,7 @@ def login(c, user, password):
 
 def test_open_mode_until_first_admin(tmp_path, monkeypatch):
     with make_app(tmp_path, monkeypatch) as c:
-        assert c.get("/api/me").json() == {"username": "", "role": "admin", "open": True}
+        assert c.get("/api/me").json() == {"username": "", "role": "admin", "open": True, "favorites": []}
         r = c.post("/api/admin/users", json={"username": "boss", "password": "123456", "role": "user"})
         assert r.json()["role"] == "admin" and r.json()["login_required"] is True
         assert c.get("/api/sites").status_code == 401

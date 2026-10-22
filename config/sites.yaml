@@ -200,6 +200,49 @@ sites:
       nopCommerce, prices for resellers only. Titles are in English (Hebrew queries find
       nothing) and a query needs at least 3 characters. 21 items per page.
 
+  - id: usys
+    name: יוניטק סיסטמס
+    enabled: true
+    home: https://www.usys.co.il/
+    fetch: browser       # guests can browse, but prices need the dealer login
+    search_url: "https://www.usys.co.il/?s={query}&post_type=product&dgwt_wcas=1"
+    page_url: "https://www.usys.co.il/page/{page}/?s={query}&post_type=product&dgwt_wcas=1"
+    pages: 3
+    page_size: 12
+    item: "div.product-small.product"
+    fields:
+      title: ".product-title a"
+      url: ".product-title a@href"
+      image: [".box-image img.attachment-woocommerce_thumbnail@data-src",
+              ".box-image img.attachment-woocommerce_thumbnail@src"]
+      sku: {sel: ".price-wrapper .sku", re: ':\s*(\S+)'}              # site catalog no.
+      brand: {sel: ".pwb-brands-in-loop a@href", re: '/brand/([a-z0-9]+)/'}
+      category: "p.product-cat"
+      price: [".price-wrapper .price ins .woocommerce-Price-amount",
+              ".price-wrapper .price .woocommerce-Price-amount",
+              ".price-wrapper .price"]                                  # unverified: dealers only
+      stock: {sel: "@class", re: '\b(instock|outofstock)\b'}
+    detail:              # deep search: the short description
+      text: ".product-short-description"
+    vat_included: false  # unverified: B2B store, the site never states it
+    login:
+      optional: true
+      url: https://www.usys.co.il/my-account/
+      username: "form.woocommerce-form-login #username"
+      password: "form.woocommerce-form-login #password"
+      submit: "form.woocommerce-form-login button[name=login]"
+      captcha:           # the form asks a sum ("8 + 2"); answered automatically
+        question: "#ncw_captcha_question_login"
+        answer: "#ncw_numeric_captcha_login"
+      logged_in: "body.logged-in"                                     # unverified
+    # titles are English and search matches titles only
+    index_queries: [lenovo, hp, dell, asus, acer, msi, gigabyte, samsung, lg, intel, kingston,
+                    western digital, lexar, verbatim, pny, d-link, laptop, desktop, monitor, ssd,
+                    nvme, ddr5, ddr4, rtx, keyboard, mouse, headset, backpack, i5, i7]
+    notes: >-
+      WooCommerce (B2BKing wholesale). Prices for logged-in dealers only. Titles are English
+      and search matches titles only (Hebrew queries and part numbers find little). 12 per page.
+
   # Behind a Cloudflare challenge and dealer login; could not be inspected from outside.
   # To configure: click "פתח והקלט" in the UI, log in, run one search, close the window,
   # and send the pages saved in data/captures/<id>/.

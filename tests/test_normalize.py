@@ -135,3 +135,23 @@ def test_canonical_brand():
     assert canonical_brand("GENERIC") == "Generic"
     assert canonical_brand("MAIWO") == "Maiwo"
     assert canonical_brand("") == ""
+
+
+@pytest.mark.parametrize("title,expected", [
+    # Usys (Unitech Systems) titles: bare G/T sizes, ″ for inches, C5- for Core 5, FD for FreeDOS
+    ("Lenovo V14 G4 14″ i5-13420H 16G D5 512G FD Black 1Y",
+     {"cpu": "Core i5", "ram": "16GB", "storage": "512GB", "screen": '14"', "os": "ללא מערכת הפעלה"}),
+    ("ASUS E1504FA 15.6 R5-7520U 8G 2T FD Black 1Y", {"cpu": "Ryzen 5", "ram": "8GB", "storage": "2TB"}),
+    ("ASUS P500MV C5-210H 32G D5 1T HDMI DP FD 3YOS", {"cpu": "Core 5", "ram": "32GB", "storage": "1TB"}),
+    ("H610M i5-14400F 16G SSD 500G PCIe NVMe Case", {"cpu": "Core i5", "ram": "16GB", "storage": "500GB"}),
+])
+def test_extract_specs_bare_units(title, expected):
+    specs = extract_specs(title)
+    assert {k: specs.get(k) for k in expected} == expected
+
+
+def test_bare_units_need_a_computer_title():
+    assert "ram" not in extract_specs("Huawei 4G router B311 8G")      # no CPU: not a computer
+    assert extract_specs("ThinkPad i5 4G LTE 16G 512G")["ram"] == "16GB"  # 4G LTE is the modem
+    from supsearch.normalize import canonical_brand
+    assert canonical_brand("barkan") == "Barkan"
