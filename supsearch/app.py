@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from . import ai, config, filters, quote
 from .index import Crawler, Index, find
+from .tailscale import TailscaleWatch
 from .aggregator import Aggregator, page_urls
 from .config import load_credentials, load_sites
 from .parse import parse_results
@@ -71,7 +72,10 @@ def create_app(sites_path=None, credentials_path=None):
         state["index"] = Index(os.path.join(config.DATA_DIR, "index.sqlite"))
         state["crawler"] = Crawler(state["agg"], state["index"], settings["index"])
         state["crawler"].start()
+        state["tailscale"] = TailscaleWatch()
+        state["tailscale"].start()
         yield
+        await state["tailscale"].stop()
         await state["crawler"].stop()
         await state["agg"].close()
         state["index"].close()
@@ -369,9 +373,8 @@ def create_app(sites_path=None, credentials_path=None):
 
     @app.get("/api/info")
     async def info(user=Depends(require_user)):
-        # set by start.sh: "office:<exit node>" or "direct:tailscale-failed"; unset = direct
-        kind, _, detail = os.environ.get("EGRESS", "").partition(":")
-        return {"egress": kind or "direct", "egress_detail": detail, "ai": ai_key() is not None}
+        # the live Tailscale state (tailscale.py), not a snapshot from startup
+        return {**state["tailscale"].info(), "ai": ai_key() is not None}
 
     # -- AI search ---------------------------------------------------------------
 

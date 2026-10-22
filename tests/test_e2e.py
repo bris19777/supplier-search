@@ -157,12 +157,10 @@ def test_credentials_from_env(monkeypatch, tmp_path):
     assert creds["a"]["username"] == "file" and creds["b"]["username"] == "env"
 
 
-def test_info_reports_egress(monkeypatch, client):
+def test_info_reports_egress(client):
+    # no TS_AUTHKEY in tests: traffic goes out directly (the live states are in test_tailscale.py)
     info = client.get("/api/info").json()
     assert (info["egress"], info["egress_detail"]) == ("direct", "")
-    monkeypatch.setenv("EGRESS", "office:office-pc")
-    info = client.get("/api/info").json()
-    assert (info["egress"], info["egress_detail"]) == ("office", "office-pc")
 
 
 def test_http_retries_a_dead_pooled_connection():

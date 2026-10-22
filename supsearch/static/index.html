@@ -456,22 +456,24 @@ $("#form").addEventListener("submit", e => {
   run($("#refresh").checked);
 });
 
-async function loadInfo() {
+async function loadInfo(first = true) {
   try {
     const j = await api("api/info");
-    if (j.ai) {
+    if (first && j.ai) {
       const a = document.createElement("a");
       a.href = "ai"; a.textContent = "חיפוש AI"; a.title = "תיאור או קוד מוצר - ה-AI ימצא את הדומה ביותר במלאי";
       $("#userbar").prepend(a);
     }
     const el = $("#egress");
-    if (j.egress === "office") {
-      el.textContent = "יוצא דרך המשרד"; el.className = "chip ok"; el.title = "Tailscale exit node: " + j.egress_detail;
-      el.hidden = false;
-    } else if (j.egress_detail === "tailscale-failed") {
-      el.textContent = "Tailscale לא מחובר - יוצא ישירות"; el.className = "chip err";
-      el.title = "בדוק את TS_AUTHKEY ו-TS_EXIT_NODE ב-Fly"; el.hidden = false;
-    }
+    const st = {
+      office: ["ok", `יוצא דרך המשרד (${j.egress_detail})`, "החיפוש באתרי הספקים יוצא מה-IP של המשרד"],
+      office_offline: ["err", "מחשב המשרד לא זמין", `${j.egress_detail} כבוי או לא מחובר ל-Tailscale - חיפוש חי באתרים ייכשל עד שיחזור`],
+      no_exit_node: ["login", "מתחבר למחשב המשרד…", j.egress_error || "Tailscale מחובר, בוחר את מחשב המשרד"],
+      connecting: ["login", "Tailscale מתחבר…", ""],
+      logged_out: ["err", "Tailscale לא מחובר", j.egress_error || "מנסה להתחבר מחדש כל 20 שניות"],
+    }[j.egress];
+    el.hidden = !st;
+    if (st) { el.className = "chip " + st[0]; el.textContent = st[1]; el.title = st[2]; }
   } catch (e) {}
 }
 
@@ -532,6 +534,7 @@ $("#quoteForm").addEventListener("submit", async e => {
 loadPrefs();
 const meReady = loadMe().catch(() => {});
 meReady.then(loadInfo);  // the AI link goes into the user bar loadMe draws
+setInterval(() => loadInfo(false), 60000);  // keep the office-connection badge current
 segment("#basis", "basis");
 segment("#view", "view");
 Promise.all([meReady, loadSites()]).then(() => {

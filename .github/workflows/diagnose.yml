@@ -23,3 +23,7 @@ jobs:
         run: |
           APP=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
           flyctl ssh console -a "$APP" -C "tailscale --socket=/tmp/tailscaled.sock status" 2>&1 | head -40 || true
+      - name: Watchdog reading of the live state
+        run: |
+          APP=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
+          flyctl ssh console -a "$APP" -C "sh -c 'cd /app && python -m supsearch.tailscale'" 2>&1 | tail -3 || true
