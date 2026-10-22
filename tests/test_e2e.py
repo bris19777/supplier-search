@@ -99,7 +99,8 @@ def client(server, tmp_path_factory):
     from supsearch import config, fetch
     config.DATA_DIR = fetch.DATA_DIR = str(tmp / "data")
     from supsearch.app import create_app
-    with TestClient(create_app(str(tmp / "sites.yaml"), str(tmp / "credentials.yaml"))) as c:
+    with TestClient(create_app(str(tmp / "sites.yaml"), str(tmp / "credentials.yaml")),
+                    client=("127.0.0.1", 50000)) as c:  # the office PC itself: open mode
         yield c
 
 
@@ -141,15 +142,8 @@ def test_empty_query_rejected(client):
     assert client.post("/api/search", json={"query": "  "}).status_code == 400
 
 
-def test_password_and_healthz(monkeypatch, client):
-    from supsearch import app as appmod
-    monkeypatch.setattr(appmod, "APP_PASSWORD", "pw")
-    assert client.get("/healthz").status_code == 200       # Fly health checks need no login
-    assert client.get("/api/sites").status_code == 401
-    assert client.get("/api/sites", auth=("x", "pw")).status_code == 200
-    monkeypatch.setattr(appmod, "APP_PASSWORD", "")
-    monkeypatch.setattr(appmod, "REQUIRE_PASSWORD", True)
-    assert client.get("/api/sites").status_code == 503     # never public by accident
+def test_healthz_needs_no_login(client):
+    assert client.get("/healthz").status_code == 200  # Fly health checks
 
 
 def test_credentials_from_env(monkeypatch, tmp_path):

@@ -212,6 +212,41 @@ class BrowserPool:
         except Exception:
             pass
 
+    async def reset(self, site_id):
+        """Forget a site's session (after its saved login changed), so the next search
+        logs in again with the new details."""
+        lock = self._locks.setdefault(site_id, asyncio.Lock())
+        async with lock:
+            ctx = self._contexts.pop(site_id, None)
+            if ctx is not None:
+                try:
+                    await ctx.clear_cookies()
+                finally:
+                    await ctx.close()
+            self._prepared.discard(site_id)
+
+    async def check_login(self, site, credentials, search_url, timeout):
+        """Log in with fresh cookies and report (ok, message) for the admin page."""
+        login = site.get("login") or {}
+        if not login.get("username"):
+            return False, "לאתר לא הוגדר טופס התחברות - התחברות ידנית בלבד"
+        await self.reset(site["id"])
+        ctx = await self.context(site["id"], site_proxy(self.settings, site))
+        page = await ctx.new_page()
+        try:
+            await self._login(page, login, credentials, timeout)
+            if not login.get("logged_in"):
+                return True, "פרטי הכניסה נשלחו (לאתר אין דרך לאמת שההתחברות הצליחה)"
+            await self._load(page, site, search_url, timeout)
+            if await page.query_selector(login["logged_in"]):
+                return True, "ההתחברות הצליחה"
+            return False, ("לא זוהתה התחברות - בדוק שם משתמש וסיסמה "
+                           "(או שהאתר דורש קוד/captcha)")
+        except Exception as e:
+            return False, f"שגיאה בהתחברות: {type(e).__name__}: {e}"[:300]
+        finally:
+            await page.close()
+
     async def open_interactive(self, site):
         """Show the site in a visible window so the user can log in / pass a captcha.
 

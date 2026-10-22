@@ -59,6 +59,11 @@ jobs:
             value=$(printenv "$name" || true)
             [ -n "$value" ] && args+=("$name=$value")
           done
+          # the key that encrypts the saved supplier passwords: made once, kept forever
+          # (a new key would make the admin re-enter every supplier password)
+          if ! flyctl secrets list -a "$APP" --json | grep -q '"SECRET_KEY"'; then
+            args+=("SECRET_KEY=$(openssl rand -hex 32)")
+          fi
           if [ ${#args[@]} -gt 0 ]; then flyctl secrets set --stage -a "$APP" "${args[@]}"; fi
 
       - name: Deploy

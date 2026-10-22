@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>כניסה · חיפוש ספקים</title>
+<style>
+  :root { --bg: #f4f6f9; --panel: #fff; --ink: #1d2433; --muted: #667085; --line: #e3e7ee; --accent: #1f5eff; --bad: #b42318; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg);
+         font-family: "Segoe UI", Arial, sans-serif; color: var(--ink); padding: 16px; }
+  form { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 28px; width: 100%; max-width: 360px; }
+  h1 { font-size: 20px; margin: 0 0 20px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  input { width: 100%; font: inherit; font-size: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+  button { width: 100%; margin-top: 20px; font: inherit; font-size: 16px; padding: 10px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .6; }
+  #err { color: var(--bad); font-size: 14px; min-height: 20px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<form id="f">
+  <h1>חיפוש ספקים</h1>
+  <label for="u">שם משתמש</label>
+  <input id="u" autocomplete="username" autofocus required>
+  <label for="p">סיסמה</label>
+  <input id="p" type="password" autocomplete="current-password" required>
+  <button id="go">כניסה</button>
+  <div id="err" role="alert"></div>
+</form>
+<script>
+document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById("go"), err = document.getElementById("err");
+  btn.disabled = true; err.textContent = "";
+  try {
+    const r = await fetch("api/login", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: document.getElementById("u").value, password: document.getElementById("p").value }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || "שגיאה");
+    location.href = "./";
+  } catch (ex) {
+    err.textContent = ex.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

@@ -131,6 +131,12 @@ class Aggregator:
             self._cache[key] = (time.time(), res)
         return res
 
+    async def forget(self, site_id):
+        """Drop a site's cached results and session after its saved login changed."""
+        for key in [k for k in self._cache if k[0] == site_id]:
+            del self._cache[key]
+        await self.browser.reset(site_id)
+
     async def search(self, query, only=None, refresh=False):
         sites = self.enabled_sites(only)
         return await asyncio.gather(*(self.search_site(s, query, refresh) for s in sites))

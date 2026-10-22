@@ -81,7 +81,8 @@ def make_client(tmp_path, monkeypatch, proxy_url, shop_port):
     monkeypatch.setattr(config, "DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(fetch, "DATA_DIR", str(tmp_path / "data"))
     from supsearch.app import create_app
-    return TestClient(create_app(str(tmp_path / "sites.yaml"), str(tmp_path / "cred.yaml")))
+    return TestClient(create_app(str(tmp_path / "sites.yaml"), str(tmp_path / "cred.yaml")),
+                      client=("127.0.0.1", 50000))
 
 
 def test_all_supplier_traffic_goes_through_proxy(tmp_path, monkeypatch, proxy, shop):

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ניהול · חיפוש ספקים</title>
+<style>
+  :root {
+    --bg: #f4f6f9; --panel: #fff; --ink: #1d2433; --muted: #667085; --line: #e3e7ee;
+    --accent: #1f5eff; --accent-soft: #e8efff; --ok: #12805c; --ok-soft: #e3f6ee;
+    --bad: #b42318; --bad-soft: #fdecea; --warn: #9a6700; --warn-soft: #fff4d6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 16px; }
+  .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0; flex: 1; }
+  a { color: var(--accent); text-decoration: none; }
+  main { max-width: 1100px; margin: 16px auto; padding: 0 16px; display: grid; gap: 16px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  h2 { font-size: 16px; margin: 0 0 4px; }
+  .hint { color: var(--muted); margin: 0 0 12px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: right; padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; border-top: 0; }
+  input, select, button { font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); }
+  input { min-width: 0; width: 100%; }
+  button { cursor: pointer; white-space: nowrap; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.danger { color: var(--bad); }
+  button:disabled { opacity: .6; cursor: default; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: #f0f2f5; color: var(--muted); }
+  .tag.ok { background: var(--ok-soft); color: var(--ok); }
+  .tag.bad { background: var(--bad-soft); color: var(--bad); }
+  .tag.warn { background: var(--warn-soft); color: var(--warn); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .row > input, .row > select { flex: 1 1 140px; width: auto; }
+  .msg { font-size: 13px; margin-top: 6px; }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+  .banner { background: var(--warn-soft); border: 1px solid #f1d48a; border-radius: 10px; padding: 12px 16px; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  @media (max-width: 760px) {
+    thead { display: none; }
+    tr { display: block; border-top: 1px solid var(--line); padding: 8px 0; }
+    td { display: block; border: 0; padding: 4px 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>ניהול</h1>
+    <span id="who"></span>
+    <a href="./">חזרה לחיפוש</a>
+  </div>
+</header>
+<main>
+  <div class="banner" id="openBanner" hidden>
+    עדיין אין משתמשים, ולכן המערכת פתוחה לכל מי שמגיע אליה. צור עכשיו משתמש מנהל ראשון,
+    ומרגע זה הכניסה תהיה עם שם משתמש וסיסמה.
+  </div>
+
+  <section>
+    <h2>סיסמאות לאתרי הספקים</h2>
+    <p class="hint">משותפות לכל המשתמשים. הסיסמאות נשמרות מוצפנות בשרת, ואף משתמש לא יכול לראות אותן,
+      גם לא מנהל. הן משמשות רק את השרת להתחברות לספקים. כדי לשנות שם משתמש בלבד, השאר את שדה
+      הסיסמה ריק.</p>
+    <table>
+      <thead><tr><th>ספק</th><th>שם משתמש באתר</th><th>סיסמה</th><th>מצב</th><th></th></tr></thead>
+      <tbody id="suppliers"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>משתמשים</h2>
+    <p class="hint">מנהל יכול לנהל משתמשים וסיסמאות ספקים. משתמש רגיל יכול רק לחפש.</p>
+    <table>
+      <thead><tr><th>שם משתמש</th><th>תפקיד</th><th>נוצר</th><th></th></tr></thead>
+      <tbody id="users"></tbody>
+    </table>
+    <h2 style="margin-top:16px">משתמש חדש</h2>
+    <form class="row" id="newUser">
+      <input id="nuName" placeholder="שם משתמש" autocomplete="off" required>
+      <input id="nuPass" type="password" placeholder="סיסמה (לפחות 6 תווים)" autocomplete="new-password" required>
+      <select id="nuRole"><option value="user">משתמש</option><option value="admin">מנהל</option></select>
+      <button class="primary">הוספה</button>
+    </form>
+    <div class="msg" id="nuMsg"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+let me = null;
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
+  if (r.status === 401) { location.href = "login"; throw new Error("יש להתחבר"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+function say(el, text, ok) { el.textContent = text; el.className = "msg " + (ok ? "ok" : "bad"); }
+
+async function loadMe() {
+  me = await api("api/me");
+  $("#who").textContent = me.open ? "" : me.username;
+  $("#openBanner").hidden = !me.open;
+}
+
+async function loadSuppliers() {
+  const list = await api("api/admin/suppliers");
+  $("#suppliers").innerHTML = list.map(s => {
+    let status;
+    if (s.saved && !s.saved.ok) status = `<span class="tag bad" title="מפתח ההצפנה השתנה">יש להזין מחדש</span>`;
+    else if (s.saved) status = `<span class="tag ok" title="${esc(s.saved.updated_by)} · ${esc(s.saved.updated_at)}">נשמר</span>`;
+    else if (s.from_config) status = `<span class="tag">מקובץ ההגדרות</span>`;
+    else status = `<span class="tag">לא הוגדר</span>`;
+    if (!s.auto_login) status += ` <span class="tag warn" title="לאתר עדיין לא הוגדר טופס התחברות אוטומטי">ללא התחברות אוטומטית</span>`;
+    return `<tr data-site="${esc(s.id)}">
+      <td><b>${esc(s.name)}</b>${s.enabled ? "" : ` <span class="tag">טרם הוגדר לחיפוש</span>`}</td>
+      <td><input class="su" value="${esc(s.saved ? s.saved.username : "")}" placeholder="שם משתמש / מייל" autocomplete="off"></td>
+      <td><input class="sp" type="password" placeholder="${s.saved ? "••••••• (ללא שינוי)" : "סיסמה"}" autocomplete="new-password"></td>
+      <td>${status}</td>
+      <td><div class="actions">
+        <button class="primary" data-act="save">שמירה</button>
+        ${s.saved && s.enabled && s.auto_login ? `<button data-act="test" title="מתחבר לאתר עם הפרטים השמורים">בדיקת התחברות</button>` : ""}
+        ${s.saved ? `<button class="danger" data-act="del">מחיקה</button>` : ""}
+      </div><div class="msg"></div></td></tr>`;
+  }).join("");
+}
+
+$("#suppliers").addEventListener("click", async (e) => {
+  const act = e.target.dataset.act; if (!act) return;
+  const tr = e.target.closest("tr"), site = tr.dataset.site, msg = tr.querySelector(".msg");
+  e.target.disabled = true;
+  try {
+    if (act === "save") {
+      await api(`api/admin/suppliers/${encodeURIComponent(site)}`, { method: "PUT",
+        body: JSON.stringify({ username: tr.querySelector(".su").value, password: tr.querySelector(".sp").value }) });
+      await loadSuppliers();
+      say(document.querySelector(`tr[data-site="${CSS.escape(site)}"] .msg`), "נשמר", true);
+    } else if (act === "del") {
+      if (!confirm("למחוק את פרטי הכניסה לאתר הזה?")) return;
+      await api(`api/admin/suppliers/${encodeURIComponent(site)}`, { method: "DELETE" });
+      await loadSuppliers();
+    } else if (act === "test") {
+      say(msg, "מתחבר לאתר…", true);
+      const j = await api(`api/admin/suppliers/${encodeURIComponent(site)}/test`, { method: "POST" });
+      say(msg, j.message, j.ok);
+    }
+  } catch (ex) {
+    say(msg, ex.message, false);
+  } finally {
+    e.target.disabled = false;
+  }
+});
+
+async function loadUsers() {
+  const users = await api("api/admin/users");
+  $("#users").innerHTML = users.map(u => `<tr data-user="${esc(u.username)}">
+    <td><b>${esc(u.username)}</b>${u.username === me.username ? ` <span class="tag">אתה</span>` : ""}</td>
+    <td><select class="role"><option value="user" ${u.role === "user" ? "selected" : ""}>משתמש</option>
+        <option value="admin" ${u.role === "admin" ? "selected" : ""}>מנהל</option></select></td>
+    <td>${esc(u.created || "")}</td>
+    <td><div class="actions">
+      <button data-act="pass">איפוס סיסמה</button>
+      ${u.username === me.username ? "" : `<button class="danger" data-act="del">מחיקה</button>`}
+    </div><div class="msg"></div></td></tr>`).join("");
+}
+
+$("#users").addEventListener("change", async (e) => {
+  if (!e.target.classList.contains("role")) return;
+  const tr = e.target.closest("tr"), msg = tr.querySelector(".msg");
+  try {
+    await api(`api/admin/users/${encodeURIComponent(tr.dataset.user)}`, { method: "PATCH", body: JSON.stringify({ role: e.target.value }) });
+    say(msg, "התפקיד עודכן", true);
+  } catch (ex) { say(msg, ex.message, false); loadUsers(); }
+});
+$("#users").addEventListener("click", async (e) => {
+  const act = e.target.dataset.act; if (!act) return;
+  const tr = e.target.closest("tr"), user = tr.dataset.user, msg = tr.querySelector(".msg");
+  try {
+    if (act === "pass") {
+      const p = prompt(`סיסמה חדשה ל-${user} (לפחות 6 תווים):`);
+      if (!p) return;
+      await api(`api/admin/users/${encodeURIComponent(user)}`, { method: "PATCH", body: JSON.stringify({ password: p }) });
+      if (user === me.username) { location.href = "login"; return; }
+      say(msg, "הסיסמה הוחלפה", true);
+    } else if (act === "del") {
+      if (!confirm(`למחוק את המשתמש ${user}?`)) return;
+      await api(`api/admin/users/${encodeURIComponent(user)}`, { method: "DELETE" });
+      loadUsers();
+    }
+  } catch (ex) { say(msg, ex.message, false); }
+});
+
+$("#newUser").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const j = await api("api/admin/users", { method: "POST", body: JSON.stringify({
+      username: $("#nuName").value, password: $("#nuPass").value, role: $("#nuRole").value }) });
+    if (j.login_required) { location.href = "login"; return; }
+    $("#newUser").reset();
+    say($("#nuMsg"), `המשתמש ${j.username} נוסף`, true);
+    loadUsers();
+  } catch (ex) { say($("#nuMsg"), ex.message, false); }
+});
+
+loadMe().then(() => Promise.all([loadSuppliers(), loadUsers()])).catch(() => {});
+</script>
+</body>
+</html>

@@ -2,28 +2,32 @@
 
 Runs on the office PC (python -m supsearch) or on a cloud host (Dockerfile,
 fly.toml). Binds to localhost by default; set HOST=0.0.0.0 to reach it from
-other machines, and then also set APP_PASSWORD, since the server holds the
-dealer logins. REQUIRE_PASSWORD=1 (set on Fly) refuses to serve without one.
+other machines.
+
+Access is by user accounts (store.py): admins manage the users and the shared
+supplier logins, users search. The first admin comes from ADMIN_PASSWORD (or
+APP_PASSWORD) on first start. With neither set and no users yet, the server is
+open to requests from the machine itself only (the office PC's own browser)
+until an admin is created in the admin page. REQUIRE_PASSWORD=1 (set on Fly)
+never runs open.
 """
 
 import asyncio
 import os
-import secrets
 import sys
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import filters
+from . import config, filters
 from .aggregator import Aggregator, page_urls
-from .config import DATA_DIR, load_credentials, load_sites
+from .config import load_credentials, load_sites
 from .parse import parse_results
+from .store import Credentials, Store, StoreError
 
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 REQUIRE_PASSWORD = os.environ.get("REQUIRE_PASSWORD") == "1"
 # A visible login window needs a screen: not on a headless Linux server
 _interactive_env = os.environ.get("INTERACTIVE_LOGIN", "auto")
@@ -31,33 +35,230 @@ INTERACTIVE = _interactive_env == "1" or (
     _interactive_env == "auto" and not (sys.platform.startswith("linux") and not os.environ.get("DISPLAY")))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_ITEMS = 600
+SESSION_COOKIE = "supsearch_session"
+OPEN_ADMIN = {"username": "", "role": "admin", "open": True}  # no users yet, office PC only
+MAX_FAILURES, FAILURE_WINDOW = 5, 15 * 60  # login attempts per user+address
 
-_basic = HTTPBasic(auto_error=False)
+
+def client_ip(request):
+    return (request.headers.get("fly-client-ip")
+            or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else ""))
 
 
-def auth(request: Request, creds: HTTPBasicCredentials = Depends(_basic)):
-    if request.url.path == "/healthz":
-        return
-    if not APP_PASSWORD:
-        if REQUIRE_PASSWORD:
-            raise HTTPException(503, "השרת נעול: יש להגדיר APP_PASSWORD")
-        return
-    if creds is None or not secrets.compare_digest(creds.password, APP_PASSWORD):
-        raise HTTPException(401, "סיסמה שגויה", headers={"WWW-Authenticate": "Basic"})
+def is_local(request):
+    """A request from the server machine itself, not relayed by a proxy."""
+    host = request.client.host if request.client else ""
+    forwarded = request.headers.get("x-forwarded-for") or request.headers.get("fly-client-ip")
+    return host in ("127.0.0.1", "::1") and not forwarded
 
 
 def create_app(sites_path=None, credentials_path=None):
     state = {}
+    failures = {}  # (ip, username) -> [timestamps]
 
     @asynccontextmanager
     async def lifespan(app):
         settings, sites = load_sites(sites_path)
-        state["agg"] = Aggregator(settings, sites, load_credentials(credentials_path))
+        store = Store(config.DATA_DIR, os.environ.get("SECRET_KEY"))
+        first_password = os.environ.get("ADMIN_PASSWORD") or os.environ.get("APP_PASSWORD")
+        if not store.has_users() and first_password:
+            store.create_user(os.environ.get("ADMIN_USERNAME", "admin"), first_password, "admin")
+        state["store"] = store
+        state["agg"] = Aggregator(settings, sites, Credentials(store, load_credentials(credentials_path)))
         state["tasks"] = set()
         yield
         await state["agg"].close()
 
-    app = FastAPI(title="חיפוש ספקים", lifespan=lifespan, dependencies=[Depends(auth)])
+    def current_user(request):
+        store = state["store"]
+        if not store.has_users():
+            return OPEN_ADMIN if not REQUIRE_PASSWORD and is_local(request) else None
+        return store.session_user(request.cookies.get(SESSION_COOKIE))
+
+    def require_user(request: Request):
+        user = current_user(request)
+        if user is None:
+            if not state["store"].has_users():
+                raise HTTPException(503, "השרת נעול: אין עדיין משתמשים. יש להגדיר APP_PASSWORD, "
+                                         "או ליצור מנהל מהדפדפן של מחשב השרת עצמו")
+            raise HTTPException(401, "יש להתחבר")
+        return user
+
+    def require_admin(user=Depends(require_user)):
+        if user["role"] != "admin":
+            raise HTTPException(403, "פעולה למנהלים בלבד")
+        return user
+
+    def page(name, admin=False):
+        async def handler(request: Request):
+            user = current_user(request)
+            if user is None:
+                if not state["store"].has_users():
+                    require_user(request)  # raises the "locked, no users yet" 503
+                return RedirectResponse("login", status_code=303)
+            if admin and user["role"] != "admin":
+                return RedirectResponse("./", status_code=303)
+            return FileResponse(os.path.join(STATIC, name))
+        return handler
+
+    app = FastAPI(title="חיפוש ספקים", lifespan=lifespan)
+    app.get("/")(page("index.html"))
+    app.get("/admin")(page("admin.html", admin=True))
+
+    @app.get("/healthz")
+    async def healthz():
+        return {"ok": True}
+
+    @app.get("/login")
+    async def login_page():
+        return FileResponse(os.path.join(STATIC, "login.html"))
+
+    # -- sessions ----------------------------------------------------------------
+
+    class LoginRequest(BaseModel):
+        username: str
+        password: str
+
+    @app.post("/api/login")
+    async def login(req: LoginRequest, request: Request, response: Response):
+        key = (client_ip(request), req.username.strip().lower())
+        now = time.time()
+        recent = [t for t in failures.get(key, []) if now - t < FAILURE_WINDOW]
+        if len(recent) >= MAX_FAILURES:
+            raise HTTPException(429, "יותר מדי ניסיונות כושלים - נסה שוב בעוד רבע שעה")
+        user = state["store"].authenticate(req.username, req.password)
+        if user is None:
+            failures[key] = recent + [now]
+            raise HTTPException(401, "שם משתמש או סיסמה שגויים")
+        failures.pop(key, None)
+        token = state["store"].new_session(user["username"])
+        https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+        response.set_cookie(SESSION_COOKIE, token, max_age=30 * 86400, httponly=True,
+                            samesite="lax", secure=https)
+        return user
+
+    @app.post("/api/logout")
+    async def logout(request: Request, response: Response):
+        state["store"].end_session(request.cookies.get(SESSION_COOKIE))
+        response.delete_cookie(SESSION_COOKIE)
+        return {"ok": True}
+
+    @app.get("/api/me")
+    async def me(user=Depends(require_user)):
+        return {"username": user["username"], "role": user["role"], "open": bool(user.get("open"))}
+
+    class PasswordChange(BaseModel):
+        current: str
+        new: str
+
+    @app.post("/api/me/password")
+    async def change_password(req: PasswordChange, user=Depends(require_user)):
+        store = state["store"]
+        if user.get("open") or store.authenticate(user["username"], req.current) is None:
+            raise HTTPException(400, "הסיסמה הנוכחית שגויה")
+        try:
+            store.update_user(user["username"], password=req.new)
+        except StoreError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True, "message": "הסיסמה הוחלפה - יש להתחבר מחדש"}
+
+    # -- admin: users --------------------------------------------------------------
+
+    class NewUser(BaseModel):
+        username: str
+        password: str
+        role: str = "user"
+
+    class UserUpdate(BaseModel):
+        password: str | None = None
+        role: str | None = None
+
+    @app.get("/api/admin/users")
+    async def list_users(admin=Depends(require_admin)):
+        return state["store"].list_users()
+
+    @app.post("/api/admin/users")
+    async def create_user(req: NewUser, admin=Depends(require_admin)):
+        try:
+            user = state["store"].create_user(req.username, req.password, req.role)
+        except StoreError as e:
+            raise HTTPException(400, str(e))
+        # the first account ends the open (no users) mode: log in from now on
+        return {**user, "login_required": bool(admin.get("open"))}
+
+    @app.patch("/api/admin/users/{username}")
+    async def update_user(username: str, req: UserUpdate, admin=Depends(require_admin)):
+        try:
+            state["store"].update_user(username, password=req.password or None, role=req.role)
+        except StoreError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @app.delete("/api/admin/users/{username}")
+    async def delete_user(username: str, admin=Depends(require_admin)):
+        if username == admin["username"]:
+            raise HTTPException(400, "אי אפשר למחוק את המשתמש שאיתו אתה מחובר")
+        try:
+            state["store"].delete_user(username)
+        except StoreError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    # -- admin: shared supplier logins ---------------------------------------------
+
+    class SupplierLogin(BaseModel):
+        username: str
+        password: str = ""  # empty keeps the saved password (username-only edit)
+
+    def known_site(site_id):
+        site = state["agg"].site(site_id)
+        if site is None:
+            raise HTTPException(404, "אתר לא קיים")
+        return site
+
+    @app.get("/api/admin/suppliers")
+    async def list_suppliers(admin=Depends(require_admin)):
+        agg, saved = state["agg"], state["store"].supplier_status()
+        return [{
+            "id": s["id"], "name": s["name"], "enabled": bool(s.get("enabled")),
+            "home": s.get("home", ""),
+            "auto_login": bool((s.get("login") or {}).get("username")),
+            "saved": saved.get(s["id"]),
+            "from_config": s["id"] in agg.credentials.static,
+        } for s in agg.sites]
+
+    @app.put("/api/admin/suppliers/{site_id}")
+    async def save_supplier(site_id: str, req: SupplierLogin, admin=Depends(require_admin)):
+        known_site(site_id)
+        try:
+            state["store"].set_supplier_login(site_id, req.username, req.password,
+                                              by=admin["username"] or "admin")
+        except StoreError as e:
+            raise HTTPException(400, str(e))
+        await state["agg"].forget(site_id)
+        return {"ok": True}
+
+    @app.delete("/api/admin/suppliers/{site_id}")
+    async def delete_supplier(site_id: str, admin=Depends(require_admin)):
+        known_site(site_id)
+        state["store"].delete_supplier_login(site_id)
+        await state["agg"].forget(site_id)
+        return {"ok": True}
+
+    @app.post("/api/admin/suppliers/{site_id}/test")
+    async def test_supplier(site_id: str, admin=Depends(require_admin)):
+        site = known_site(site_id)
+        agg = state["agg"]
+        creds = agg.credentials.get(site_id)
+        if not creds:
+            raise HTTPException(400, "לא נשמרו פרטי כניסה לאתר הזה")
+        if site.get("fetch") != "browser" or not site.get("search_url"):
+            raise HTTPException(400, "האתר עדיין לא מוגדר לחיפוש עם התחברות")
+        timeout = int(site.get("timeout") or agg.settings.get("timeout", 30))
+        await agg.forget(site_id)
+        ok, message = await agg.browser.check_login(site, creds, page_urls(site, "test")[0], timeout)
+        return {"ok": ok, "message": message}
 
     class SearchRequest(BaseModel):
         query: str
@@ -78,33 +279,25 @@ def create_app(sites_path=None, credentials_path=None):
     class CaptureRequest(BaseModel):
         query: str
 
-    @app.get("/healthz")
-    async def healthz():
-        return {"ok": True}
-
-    @app.get("/")
-    async def index():
-        return FileResponse(os.path.join(STATIC, "index.html"))
-
     @app.get("/api/info")
-    async def info():
+    async def info(user=Depends(require_user)):
         # set by start.sh: "office:<exit node>" or "direct:tailscale-failed"; unset = direct
         kind, _, detail = os.environ.get("EGRESS", "").partition(":")
         return {"egress": kind or "direct", "egress_detail": detail}
 
     @app.get("/api/sites")
-    async def sites():
+    async def sites(user=Depends(require_user)):
         agg = state["agg"]
         return [{
             "id": s["id"], "name": s["name"], "enabled": bool(s.get("enabled")),
             "fetch": s.get("fetch"), "home": s.get("home", ""),
             "login": bool(s.get("login")), "has_credentials": s["id"] in agg.credentials,
-            "interactive": agg.browser.is_interactive(s["id"]), "can_open_window": INTERACTIVE,
+            "interactive": agg.browser.is_interactive(s["id"]), "can_open_window": INTERACTIVE and user["role"] == "admin",
             "notes": s.get("notes", ""),
         } for s in agg.sites]
 
     @app.post("/api/search")
-    async def search(req: SearchRequest):
+    async def search(req: SearchRequest, user=Depends(require_user)):
         query = req.query.strip()
         if not query:
             raise HTTPException(400, "יש להזין מילת חיפוש")
@@ -128,7 +321,7 @@ def create_app(sites_path=None, credentials_path=None):
         return body
 
     @app.post("/api/sites/{site_id}/login-window")
-    async def login_window(site_id: str):
+    async def login_window(site_id: str, admin=Depends(require_admin)):
         agg = state["agg"]
         site = agg.site(site_id)
         if site is None:
@@ -136,7 +329,7 @@ def create_app(sites_path=None, credentials_path=None):
         if site.get("fetch") != "browser":
             raise HTTPException(400, "האתר מוגדר כ-fetch: http ואינו משתמש בדפדפן")
         if not INTERACTIVE:
-            raise HTTPException(400, "בשרת ענן אין מסך לחלון התחברות - הגדר את פרטי הכניסה ב-SUPPLIER_CREDENTIALS")
+            raise HTTPException(400, "בשרת ענן אין מסך לחלון התחברות - שמור את פרטי הכניסה בעמוד הניהול")
         if agg.browser.is_interactive(site_id):
             return {"ok": True, "message": "חלון ההתחברות לאתר הזה כבר פתוח במחשב השרת."}
         task = asyncio.create_task(agg.browser.open_interactive(site))
@@ -145,7 +338,7 @@ def create_app(sites_path=None, credentials_path=None):
         return {"ok": True, "message": "חלון דפדפן נפתח במחשב השרת. התחבר וסגור את החלון בסיום."}
 
     @app.post("/api/sites/{site_id}/capture")
-    async def capture(site_id: str, req: CaptureRequest):
+    async def capture(site_id: str, req: CaptureRequest, admin=Depends(require_admin)):
         """Save the raw first results page, for writing or fixing a site's selectors."""
         agg = state["agg"]
         site = agg.site(site_id)
@@ -159,7 +352,7 @@ def create_app(sites_path=None, credentials_path=None):
             content = await agg.fetch(site, url, timeout)
         except Exception as e:
             raise HTTPException(502, f"{type(e).__name__}: {e}"[:300])
-        folder = os.path.join(DATA_DIR, "captures")
+        folder = os.path.join(config.DATA_DIR, "captures")
         os.makedirs(folder, exist_ok=True)
         ext = "json" if site.get("format") == "json" else "html"
         path = os.path.join(folder, f"{site_id}-{time.strftime('%Y%m%d-%H%M%S')}.{ext}")
