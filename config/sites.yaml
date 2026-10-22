@@ -36,6 +36,8 @@ sites:
       brand: {sel: ".card__vendor", re: '\|\s*(.+?)\s*$'}
       price: [".price__current", ".price .money", ".price"]   # unverified: rendered only for dealers
       stock: {const: "במלאי"}
+    detail:              # deep search: the spec table on the product page
+      rows: "#specification-table li"
     vat_included: false
     stock_default: true
     login:
@@ -68,6 +70,8 @@ sites:
       brand: {sel: ".brand_json", re: '"title":"\s*([^"]+?)\s*"'}
       price: "p.price"
       stock: {sel: ".stock_show", re: '^([01])$'}   # 1 in stock, 0 out, 2 on the way (unknown)
+    detail:              # deep search: titles carry only the model; the description has the specs
+      text: "#item_details"
     currency: USD        # the store is set to USD; verify once logged in
     vat_included: false  # unverified
     login:
@@ -130,6 +134,8 @@ sites:
       brand: ".manu img@alt"
       price: "small.price"   # unverified: empty for guests
       stock: ".stockMsg"
+    detail:              # deep search: the spec list on the product page
+      rows: ".product-page li.list-group-item"
     vat_included: false      # the site states prices exclude VAT
     login:
       optional: true

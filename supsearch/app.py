@@ -275,6 +275,7 @@ def create_app(sites_path=None, credentials_path=None):
         min_relevance: float = 0.0
         basis: str = "inc"          # inc | ex  (price with / without VAT)
         sort: str = "relevance"
+        deep: bool = False          # read missing specs from the product pages (slower)
 
     class CaptureRequest(BaseModel):
         query: str
@@ -303,6 +304,8 @@ def create_app(sites_path=None, credentials_path=None):
             raise HTTPException(400, "יש להזין מילת חיפוש")
         agg = state["agg"]
         results = await agg.search(query, only=set(req.sites) or None, refresh=req.refresh)
+        if req.deep:
+            await agg.deepen(results)
         products = [p.to_dict() for r in results for p in r.items]
         f = req.model_dump()
         items, facets, price_range = filters.apply(products, query, f)

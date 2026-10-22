@@ -87,6 +87,7 @@
     <input id="q" type="search" placeholder="שם מוצר, דגם או מק&quot;ט יצרן…" autocomplete="off" autofocus>
     <button class="primary" type="submit" id="go">חפש</button>
     <label title="מתעלם מהזיכרון הזמני ומושך מחדש מכל האתרים"><input type="checkbox" id="refresh"> רענון מלא</label>
+    <label title="למחשבים ומסכים שבשמם חסר מפרט: פותח את דף המוצר וקורא ממנו מעבד, זיכרון, אחסון ומסך. איטי יותר"><input type="checkbox" id="deep"> חיפוש מעמיק</label>
     <span class="seg" id="basis"><button type="button" data-v="inc" class="on">כולל מע"מ</button><button type="button" data-v="ex">לפני מע"מ</button></span>
     <span class="seg" id="view"><button type="button" data-v="list" class="on">רשימה</button><button type="button" data-v="compare">השוואה</button></span>
     <button type="button" id="filtersToggle">סינון</button>
@@ -217,7 +218,7 @@ function renderSites(results) {
     if (r && !off) {
       if (r.needs_login) { cls += " login"; info = `${r.count} · לא מחובר, בלי מחירים`; }
       else if (!r.ok || r.error) { cls += " err"; info = "שגיאה"; }
-      else { cls += " ok"; info = `${r.count} · ${r.elapsed} שנ'${r.cached ? " · זיכרון" : ""}`; }
+      else { cls += " ok"; info = `${r.count} · ${r.elapsed} שנ'${r.cached ? " · זיכרון" : ""}${r.deep_filled ? ` · מפרט ל-${r.deep_filled}` : ""}`; }
     }
     const title = esc((r && r.error) || s.notes || "");
     const loginBtn = s.fetch === "browser" && s.can_open_window ? `<button type="button" data-login="${esc(s.id)}" title="פתיחת חלון דפדפן במחשב השרת להתחברות ידנית">התחברות</button>` : "";
@@ -248,7 +249,7 @@ function request(refresh) {
     in_stock: $("#instock").checked, has_price: $("#hasprice").checked,
     include: $("#include").value, exclude: $("#exclude").value,
     min_relevance: $("#relevant").checked ? 1 : 0,
-    basis: state.basis, sort: $("#sort").value,
+    basis: state.basis, sort: $("#sort").value, deep: $("#deep").checked,
   };
 }
 
@@ -260,7 +261,7 @@ async function run(refresh) {
   const my = ++seq;
   const isNew = body.query !== state.lastQuery || refresh;
   $("#go").disabled = true;
-  $("#count").innerHTML = `<span class="spinner"></span> ${isNew ? "מחפש בכל הספקים…" : "מסנן…"}`;
+  $("#count").innerHTML = `<span class="spinner"></span> ${isNew ? "מחפש בכל הספקים…" : body.deep ? "קורא מפרט מדפי המוצרים…" : "מסנן…"}`;
   try {
     const j = await api("api/search", { method: "POST", body: JSON.stringify(body) });
     if (my !== seq) return;
@@ -325,7 +326,8 @@ function render(j) {
           ${p.brand ? `<span>${esc(p.brand)}</span>` : ""}
           ${p.mpn ? `<span>מק"ט יצרן: ${esc(p.mpn)}</span>` : ""}
           ${p.sku ? `<span>מק"ט: ${esc(p.sku)}</span>` : ""}
-          ${p.category ? `<span>${esc(p.category)}</span>` : ""}</div></div>
+          ${p.category ? `<span>${esc(p.category)}</span>` : ""}
+          ${p.deep_specs && p.deep_specs.length ? `<span class="tag" title="נקרא מדף המוצר בחיפוש מעמיק">מפרט מדף המוצר</span>` : ""}</div></div>
       <div class="price">${priceBlock(p)}</div></div>`).join("") + `</div>`;
 }
 
@@ -357,7 +359,7 @@ $("#facets").addEventListener("click", e => {
 let timer;
 function debounced() { clearTimeout(timer); timer = setTimeout(() => run(false), 400); }
 ["#pmin", "#pmax", "#include", "#exclude"].forEach(id => $(id).addEventListener("input", debounced));
-["#instock", "#hasprice", "#relevant", "#sort"].forEach(id => $(id).addEventListener("change", () => run(false)));
+["#instock", "#hasprice", "#relevant", "#sort", "#deep"].forEach(id => $(id).addEventListener("change", () => run(false)));
 $("#clear").addEventListener("click", () => {
   state.facets = {};
   ["#pmin", "#pmax", "#include", "#exclude"].forEach(id => $(id).value = "");

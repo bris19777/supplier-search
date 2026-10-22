@@ -22,6 +22,7 @@ class Product:
     in_stock: Optional[bool] = None  # None = the site did not say
     stock_text: str = ""
     specs: dict = field(default_factory=dict)  # facet key -> value, see normalize.extract_specs
+    deep_specs: list = field(default_factory=list)  # spec keys read from the product page (deep search)
 
     def to_dict(self):
         return asdict(self)
@@ -37,11 +38,13 @@ class SiteResult:
     needs_login: bool = False
     elapsed: float = 0.0
     cached: bool = False
+    deep_read: int = 0       # product pages opened by deep search
+    deep_filled: int = 0     # products that gained specs from them
 
     def summary(self):
         return {
             "site": self.site, "site_name": self.site_name, "ok": self.ok,
             "count": len(self.items), "error": self.error,
             "needs_login": self.needs_login, "elapsed": round(self.elapsed, 2),
-            "cached": self.cached,
+            "cached": self.cached, "deep_read": self.deep_read, "deep_filled": self.deep_filled,
         }

@@ -14,6 +14,7 @@ from urllib.parse import quote_plus
 
 from .fetch import BrowserPool, HttpFetcher, NeedsLogin, site_proxy
 from .models import SiteResult
+from .detail import parse_detail, wants_detail
 from .parse import parse_results
 
 # The outbound proxy is the office PC (Tailscale exit node); when it is off or
@@ -21,6 +22,8 @@ from .parse import parse_results
 OFFICE_DOWN = "אין יציאה דרך מחשב המשרד - בדוק שהמחשב דלוק ו-Tailscale מחובר כ-exit node"
 # (with a proxy set, httpx only ever connects to the proxy, so ConnectError means it is down)
 _PROXY_DOWN = re.compile(r"ERR_PROXY|ERR_TUNNEL|ERR_SOCKS|ProxyError|ConnectError|proxy", re.I)
+
+DETAIL_TTL = 24 * 3600  # product specs hardly change; reopen a page at most daily
 
 BOI_RATE_URL = "https://boi.org.il/PublicApi/GetExchangeRate?key={currency}"
 
@@ -43,6 +46,7 @@ class Aggregator:
         self.browser = BrowserPool(settings)
         self._cache = {}
         self._rates = {}  # currency -> (fetched_at, shekels per unit)
+        self._details = {}  # product url -> (fetched_at, specs from its page)
 
     def site(self, site_id):
         return next((s for s in self.sites if s["id"] == site_id), None)
@@ -130,6 +134,46 @@ class Aggregator:
         if res.ok and not res.error and not res.needs_login:
             self._cache[key] = (time.time(), res)
         return res
+
+    async def _detail_specs(self, site, url, timeout):
+        hit = self._details.get(url)
+        if hit and time.time() - hit[0] < DETAIL_TTL:
+            return hit[1], False
+        detail = site["detail"]
+        page_site = {**site, "format": "html", "wait_for": detail.get("rows") or detail.get("text")}
+        html = await self.fetch(page_site, url, timeout, first_page=False)
+        specs = parse_detail(html, detail)
+        self._details[url] = (time.time(), specs)
+        return specs, True
+
+    async def deepen(self, results):
+        """Deep search: open the product pages of computers/monitors whose title lacks
+        specs and fill them in. Bounded per site (detail.limit, default 20 pages) and
+        run a few at a time; specs found are kept on the (cached) products."""
+        async def one_site(res):
+            site = self.site(res.site)
+            if not site or not site.get("detail"):
+                return
+            limit = int(site["detail"].get("limit", 20))
+            todo = [p for p in res.items if p.url and wants_detail(p)][:limit]
+            timeout = int(site.get("timeout") or self.settings.get("timeout", 30))
+            gate = asyncio.Semaphore(int(site["detail"].get("parallel", 4)))
+
+            async def one(product):
+                async with gate:
+                    try:
+                        specs, fetched = await asyncio.wait_for(
+                            self._detail_specs(site, product.url, timeout), timeout)
+                    except Exception:
+                        return  # a page that fails to load just stays as it was
+                res.deep_read += fetched
+                added = [k for k, v in specs.items() if k not in product.specs]
+                for k in added:
+                    product.specs[k] = specs[k]
+                product.deep_specs = sorted(set(product.deep_specs) | set(added))
+            await asyncio.gather(*(one(p) for p in todo))
+            res.deep_filled = sum(1 for p in res.items if p.deep_specs)
+        await asyncio.gather(*(one_site(r) for r in results))
 
     async def forget(self, site_id):
         """Drop a site's cached results and session after its saved login changed."""
