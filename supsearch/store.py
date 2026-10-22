@@ -289,6 +289,19 @@ class Store:
             self._write("quotes.json", {"next": number + 1, "log": log})
         return number
 
+    # -- spec sheets fetched for quotes (they don't change; never pay for one twice) --
+
+    def get_specs(self, key):
+        return self._read("specs_cache.json").get(key)
+
+    def put_specs(self, key, value):
+        with self._lock:
+            data = self._read("specs_cache.json")
+            data[key] = {**value, "at": time.strftime("%Y-%m-%d")}
+            if len(data) > 5000:  # keep the newest
+                data = dict(list(data.items())[-5000:])
+            self._write("specs_cache.json", data)
+
     # -- app secrets (the Anthropic API key for AI search) ------------------------
 
     def set_secret(self, name, value, by):

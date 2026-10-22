@@ -80,6 +80,8 @@
   dialog .totals { background: #fafbfc; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
   dialog .actions { display: flex; gap: 8px; justify-content: flex-start; }
   dialog .cost { font-size: 12px; color: var(--muted); }
+  dialog .specbox .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  dialog .specbox button { padding: 6px 12px; }
   .userbar { display: inline-flex; gap: 10px; align-items: center; margin-inline-start: auto; color: var(--muted); }
   .userbar a, .userbar button.link { color: var(--accent); text-decoration: none; background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
   @media (max-width: 860px) {
@@ -168,11 +170,18 @@
     <div class="grid3">
       <label>כמות <input id="qQty" type="number" min="1" step="1" value="1"></label>
       <label>תוספת % <input id="qMarkup" type="number" min="0" step="0.5"></label>
-      <label>מחיר ליחידה (לפני מע"מ) <input id="qPrice" type="number" min="0" step="0.01" required></label>
+      <label><span id="qPriceLabel">מחיר ליחידה (לפני מע"מ)</span> <input id="qPrice" type="number" min="0" step="0.01" required></label>
     </div>
+    <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qInc"> המחיר שאני רושם כולל מע"מ</label>
     <div class="cost" id="qCost"></div>
     <label>הערות <textarea id="qNotes" rows="2" maxlength="1000" placeholder="למשל: כולל התקנה, אחריות 3 שנים"></textarea></label>
     <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qImage" checked> להציג תמונת מוצר</label>
+    <div class="specbox">
+      <div class="row"><button type="button" id="qSpecsBtn" title="מחפש את דף המפרט הרשמי של הדגם באתר היצרן (בעזרת ה-AI)">הבא מפרט טכני מלא מהיצרן</button>
+        <span class="cost" id="qSpecsMsg"></span></div>
+      <label id="qSpecsWrap" hidden>מפרט טכני (שורה לכל פרט, "שם: ערך". אפשר לערוך)
+        <textarea id="qSpecs" rows="8" dir="auto"></textarea></label>
+    </div>
     <div class="totals" id="qTotals"></div>
     <div class="actions">
       <button type="submit" class="primary" id="qGo" value="go">הורדת PDF</button>
@@ -506,16 +515,56 @@ async function loadInfo(first = true) {
 // -- price quote dialog --------------------------------------------------------------
 let quoteSettings = null, quoteProduct = null;
 const r2 = (v) => Math.round(v * 100) / 100;
+const VAT = 0.18;
 function quoteTotals() {
   const qty = Number($("#qQty").value) || 0, unit = Number($("#qPrice").value) || 0;
-  const sub = r2(qty * unit), vat = r2(sub * 0.18);
-  $("#qTotals").innerHTML = `לפני מע"מ: <b>${money(sub)}</b> · מע"מ: ${money(vat)} · סה"כ: <b>${money(r2(sub + vat))}</b>`;
+  let sub, vat, total;
+  if ($("#qInc").checked) { total = r2(qty * unit); sub = r2(total / (1 + VAT)); vat = r2(total - sub); }
+  else { sub = r2(qty * unit); vat = r2(sub * VAT); total = r2(sub + vat); }
+  $("#qTotals").innerHTML = `לפני מע"מ: <b>${money(sub)}</b> · מע"מ: ${money(vat)} · סה"כ: <b>${money(total)}</b>`;
 }
 function priceFromMarkup() {
   const cost = quoteProduct.price_ex_vat;
-  if (cost != null) $("#qPrice").value = r2(cost * (1 + (Number($("#qMarkup").value) || 0) / 100));
+  if (cost != null) {
+    const ex = cost * (1 + (Number($("#qMarkup").value) || 0) / 100);
+    $("#qPrice").value = r2($("#qInc").checked ? ex * (1 + VAT) : ex);
+  }
   quoteTotals();
 }
+$("#qInc").addEventListener("change", () => {
+  // switching the meaning of the price field converts the number in it, the total stays
+  const v = Number($("#qPrice").value);
+  if (v) $("#qPrice").value = r2($("#qInc").checked ? v * (1 + VAT) : v / (1 + VAT));
+  $("#qPriceLabel").textContent = $("#qInc").checked ? 'מחיר ליחידה (כולל מע"מ)' : 'מחיר ליחידה (לפני מע"מ)';
+  quoteTotals();
+});
+let specSource = "";
+function specsFromText() {
+  return $("#qSpecs").value.split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+    const i = l.indexOf(":");
+    return i > 0 ? { label: l.slice(0, i).trim().slice(0, 80), value: l.slice(i + 1).trim().slice(0, 300) }
+                 : { label: "", value: l.slice(0, 300) };
+  }).filter(r => r.value).map(r => ({ label: r.label || "•", value: r.value })).slice(0, 60);
+}
+$("#qSpecsBtn").addEventListener("click", async () => {
+  const btn = $("#qSpecsBtn"), msg = $("#qSpecsMsg");
+  btn.disabled = true; msg.innerHTML = `<span class="spinner"></span> מחפש באתר היצרן… (עד דקה)`;
+  try {
+    const j = await api("api/quote/specs", { method: "POST", body: JSON.stringify({
+      title: quoteProduct.title, mpn: quoteProduct.mpn || "", brand: quoteProduct.brand || "",
+      site: quoteProduct.site, url: quoteProduct.url || "" }) });
+    $("#qSpecs").value = j.specs.map(r => `${r.label}: ${r.value}`).join("\n");
+    $("#qSpecsWrap").hidden = false;
+    // only the manufacturer is named as the source; the supplier never appears on a quote
+    specSource = j.source === "אתר היצרן" ? (j.source_url ? `${j.source} · ${j.source_url}` : j.source) : "";
+    msg.textContent = `${j.specs.length} פרטים · מקור: ${j.source}` + (j.cached ? " · נשמר מקודם"
+      : j.cost_usd ? ` · עלות: $${j.cost_usd.toFixed(3)}` : "") + (j.ai_note ? ` (${j.ai_note})` : "");
+  } catch (ex) {
+    msg.textContent = ex.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
 $("#results").addEventListener("click", async e => {
   const i = e.target.dataset.quote; if (i === undefined) return;
   quoteProduct = state.quoteItems[Number(i)];
@@ -527,6 +576,7 @@ $("#results").addEventListener("click", async e => {
     ? `עלות אצל ${quoteProduct.site_name}: ${money(quoteProduct.price_ex_vat)} לפני מע"מ`
     : "אין מחיר עלות (הספק לא מחובר) - יש להזין מחיר ליחידה";
   $("#qPrice").value = "";
+  $("#qSpecs").value = ""; $("#qSpecsWrap").hidden = true; $("#qSpecsMsg").textContent = ""; specSource = "";
   priceFromMarkup();
   $("#quoteDlg").showModal();
 });
@@ -539,9 +589,10 @@ $("#quoteForm").addEventListener("submit", async e => {
   try {
     const r = await fetch("api/quote/pdf", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ customer: $("#qCustomer").value, customer_contact: $("#qContact").value,
-        notes: $("#qNotes").value, show_images: $("#qImage").checked,
+        notes: $("#qNotes").value, show_images: $("#qImage").checked, prices_include_vat: $("#qInc").checked,
         items: [{ title: quoteProduct.title, mpn: quoteProduct.mpn || "", image: quoteProduct.image || "",
-                  qty: Number($("#qQty").value), unit_price: Number($("#qPrice").value) }] }) });
+                  qty: Number($("#qQty").value), unit_price: Number($("#qPrice").value),
+                  specs: $("#qSpecsWrap").hidden ? [] : specsFromText(), spec_source: specSource.slice(0, 300) }] }) });
     if (r.status === 401) { location.href = "login"; return; }
     if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.detail ? (typeof j.detail === "string" ? j.detail : "יש לבדוק את השדות") : r.statusText); }
     const name = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);

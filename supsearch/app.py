@@ -14,6 +14,7 @@ never runs open.
 
 import asyncio
 import os
+from urllib.parse import urlsplit
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -27,6 +28,8 @@ from .index import Crawler, Index, find
 from .tailscale import TailscaleWatch
 from .aggregator import Aggregator, page_urls
 from .config import load_credentials, load_sites
+from .detail import all_rows as detail_rows
+from .normalize import norm_mpn
 from .parse import parse_results
 from .store import Credentials, Store, StoreError
 
@@ -199,12 +202,26 @@ def create_app(sites_path=None, credentials_path=None):
 
     # -- price quotes (PDF) -----------------------------------------------------------
 
+    class SpecRow(BaseModel):
+        label: str = Field(max_length=80)
+        value: str = Field(max_length=300)
+
     class QuoteItem(BaseModel):
         title: str = Field(min_length=1, max_length=300)
         mpn: str = Field("", max_length=80)
         image: str = Field("", max_length=1000)
         qty: float = Field(gt=0, le=10000)
-        unit_price: float = Field(ge=0, le=10_000_000)  # selling price per unit, before VAT
+        unit_price: float = Field(ge=0, le=10_000_000)  # per unit; before VAT unless prices_include_vat
+        specs: list[SpecRow] = Field(default_factory=list, max_length=60)
+        spec_source: str = Field("", max_length=300)
+
+    class SpecsRequest(BaseModel):
+        title: str = Field(min_length=1, max_length=300)
+        mpn: str = Field("", max_length=80)
+        brand: str = Field("", max_length=60)
+        site: str = Field("", max_length=40)
+        url: str = Field("", max_length=1000)
+        refresh: bool = False
 
     class QuoteRequest(BaseModel):
         items: list[QuoteItem] = Field(min_length=1, max_length=50)
@@ -212,6 +229,7 @@ def create_app(sites_path=None, credentials_path=None):
         customer_contact: str = Field("", max_length=200)
         notes: str = Field("", max_length=1000)
         show_images: bool = True
+        prices_include_vat: bool = False
 
     class QuoteSettings(BaseModel):
         business_name: str = Field("", max_length=120)
@@ -236,18 +254,68 @@ def create_app(sites_path=None, credentials_path=None):
             raise HTTPException(400, str(e))
         return {"ok": True}
 
+    @app.post("/api/quote/specs")
+    async def quote_specs(req: SpecsRequest, user=Depends(require_user)):
+        """The full spec sheet for a quote: from the manufacturer's site (AI web lookup, with
+        the API key), else the supplier's product page spec table. Cached per product."""
+        store, agg = state["store"], state["agg"]
+        key = norm_mpn(req.mpn) or req.title.strip().lower()
+        cached = None if req.refresh else store.get_specs(key)
+        if cached:
+            return {**cached, "cached": True, "cost_usd": 0}
+        result, ai_note = None, ""
+        api_key = ai_key()
+        if api_key:
+            try:
+                found = await ai.manufacturer_specs(api_key, req.title, req.mpn, req.brand)
+                if found["found"]:
+                    result = {"specs": found["specs"], "source": "אתר היצרן", "source_url": found["source_url"],
+                              "model_name": found["model_name"], "cost_usd": found["cost_usd"]}
+                else:
+                    ai_note = "לא נמצא דף מפרט רשמי אצל היצרן"
+            except ai.AIError as e:
+                ai_note = str(e)
+        site = agg.site(req.site) if req.site else None
+        if result is None and site and (site.get("detail") or {}).get("rows") and req.url.startswith("http"):
+            timeout = int(site.get("timeout") or agg.settings.get("timeout", 30))
+            page_site = {**site, "format": "html", "wait_for": site["detail"]["rows"]}
+            try:
+                html = await agg.fetch(page_site, req.url, timeout, first_page=False)
+                rows = detail_rows(html, site["detail"])
+                if rows:
+                    result = {"specs": rows, "source": f"דף המוצר אצל {site['name']}", "source_url": req.url,
+                              "model_name": "", "cost_usd": 0}
+            except Exception:
+                pass
+        if result is None:
+            raise HTTPException(404, ai_note or ("לא נמצא מפרט מלא. כדי לחפש באתר היצרן צריך מפתח API "
+                                                 "(עמוד הניהול)" if not api_key else "לא נמצא מפרט מלא"))
+        store.put_specs(key, {k: v for k, v in result.items() if k != "cost_usd"})
+        return {**result, "cached": False, "ai_note": ai_note}
+
     @app.post("/api/quote/pdf")
     async def quote_pdf(req: QuoteRequest, user=Depends(require_user)):
+        # a quote never reveals the supplier: no source line naming one of them or its site
+        supplier_marks = set()
+        for s in state["agg"].sites:
+            if len(s["name"]) >= 3:  # a one-letter name would match any text
+                supplier_marks.add(s["name"].lower())
+            for u in (s.get("home"), s.get("search_url")):
+                if u:
+                    supplier_marks.add(urlsplit(u).hostname.removeprefix("www.").lower())
         items = []
         for it in req.items:
             image = it.image if it.image.startswith(("https://", "http://")) else ""  # never file:// etc.
-            items.append({**it.model_dump(), "image": image})
+            source = it.spec_source
+            if any(m and m in source.lower() for m in supplier_marks):
+                source = ""
+            items.append({**it.model_dump(), "image": image, "spec_source": source})
         store, agg = state["store"], state["agg"]
         vat_rate = float(agg.settings.get("vat_rate", 0.18))
-        _, _, total = quote.totals(items, vat_rate)
+        _, _, total = quote.totals(items, vat_rate, req.prices_include_vat)
         number = store.next_quote(user["username"] or "admin", req.customer, total)
         page = quote.quote_html(store.quote_settings(), number, items, req.customer, req.customer_contact,
-                                req.notes, req.show_images, vat_rate)
+                                req.notes, req.show_images, vat_rate, inclusive=req.prices_include_vat)
         try:
             pdf = await agg.browser.render_pdf(page)
         except Exception as e:

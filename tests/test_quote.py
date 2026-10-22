@@ -94,3 +94,140 @@ def test_favorites_per_user(tmp_path, monkeypatch):
         c.post("/api/logout")
         login(c, "dana", "dana-pass")
         assert c.get("/api/me").json()["favorites"] == []                         # each user their own
+
+
+def test_totals_with_vat_included():
+    items = [{"title": "x", "qty": 2, "unit_price": 1180}]
+    assert quote.totals(items, 0.18, inclusive=True) == (2000.0, 360.0, 2360.0)  # total is what was typed
+    assert quote.totals([{"title": "x", "qty": 3, "unit_price": 99.9}], 0.18, inclusive=True)[2] == 299.7
+
+
+def test_pdf_with_vat_included_and_specs(tmp_path, monkeypatch):
+    with make_app(tmp_path, monkeypatch) as c:
+        specs = [{"label": "מעבד", "value": "Intel Core Ultra 7 355"}, {"label": "זיכרון", "value": "32GB DDR5-5600"}]
+        r = c.post("/api/quote/pdf", json={"prices_include_vat": True, "items": [{
+            "title": "Lenovo ThinkPad L16", "qty": 1, "unit_price": 5900, "specs": specs,
+            "spec_source": "אתר היצרן · https://psref.lenovo.com/x"}]})
+        assert r.status_code == 200
+        text = "".join(p.extract_text() for p in PdfReader(io.BytesIO(r.content)).pages)
+        for expected in ("5,900.00", "5,000.00", "900.00", "Intel Core Ultra 7 355", "32GB DDR5",
+                         "psref.lenovo.com"):
+            assert expected in text, expected
+
+
+# -- the full spec sheet ---------------------------------------------------------------
+
+from types import SimpleNamespace as NS  # noqa: E402
+
+from supsearch import ai  # noqa: E402
+
+SPEC_PAGE = """<ul id="spec"><li><span>דגם מעבד</span><span>Intel Core Ultra 5 225T</span></li>
+<li><span>זכרון</span><span>16GB</span></li><li><span>אחסון</span><span>512GB SSD</span></li></ul>"""
+
+
+class FakeSpecs:
+    def __init__(self, found=True):
+        self.calls = []
+        self.found = found
+        self.beta = NS(messages=NS(create=self.create))
+
+    async def create(self, **kw):
+        self.calls.append(kw)
+        usage = NS(input_tokens=5000, output_tokens=800, cache_read_input_tokens=0,
+                   cache_creation_input_tokens=0, server_tool_use=NS(web_search_requests=2))
+        if len(self.calls) == 1:  # the server-side search loop paused: resumed by re-sending
+            return NS(stop_reason="pause_turn", usage=usage, content=[NS(type="server_tool_use")])
+        return NS(stop_reason="tool_use", usage=usage, content=[NS(
+            type="tool_use", name="submit_specs", id="t1", input={
+                "found": self.found, "model_name": "ThinkPad L16 Gen 3", "source_url": "https://psref.lenovo.com/x",
+                "specs": [{"label": "מעבד", "value": "Intel Core Ultra 7 355"},
+                          {"label": "מסך", "value": '16" WUXGA IPS'}] if self.found else []})])
+
+
+@pytest.fixture()
+def spec_shop():
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = SPEC_PAGE.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{httpd.server_port}"
+    httpd.shutdown()
+
+
+def specs_app(tmp_path, monkeypatch, shop_url, env=None):
+    from supsearch import app as appmod, config, fetch
+    monkeypatch.setattr(config, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(fetch, "DATA_DIR", str(tmp_path / "data"))
+    for k in ("ADMIN_PASSWORD", "APP_PASSWORD", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in (env or {}).items():
+        monkeypatch.setenv(k, v)
+    sites = {"settings": {"channel": ""}, "sites": [
+        {"id": "t", "name": "טכנו", "fetch": "http", "search_url": shop_url + "/s?q={query}", "item": "x",
+         "detail": {"rows": "#spec li"}}]}
+    (tmp_path / "sites.yaml").write_text(yaml.safe_dump(sites, allow_unicode=True), encoding="utf-8")
+    return TestClient(appmod.create_app(str(tmp_path / "sites.yaml"), str(tmp_path / "none.yaml")),
+                      client=("127.0.0.1", 50000))
+
+
+REQ = {"title": "Lenovo ThinkPad L16", "mpn": "21X8-002RIV", "brand": "Lenovo", "site": "t"}
+
+
+def test_specs_from_the_manufacturer(tmp_path, monkeypatch, spec_shop):
+    fake = FakeSpecs()
+    monkeypatch.setattr(ai, "make_client", lambda key: fake)
+    with specs_app(tmp_path, monkeypatch, spec_shop, env={"ANTHROPIC_API_KEY": "k"}) as c:
+        j = c.post("/api/quote/specs", json={**REQ, "url": spec_shop + "/p/1"}).json()
+        assert j["source"] == "אתר היצרן" and j["source_url"] == "https://psref.lenovo.com/x"
+        assert j["specs"][0] == {"label": "מעבד", "value": "Intel Core Ultra 7 355"} and not j["cached"]
+        assert j["cost_usd"] > 0
+        first = fake.calls[0]
+        web = {t["name"]: t for t in first["tools"]}
+        assert web["web_search"]["type"] == "web_search_20260209"
+        assert "lenovo.com" in web["web_search"]["allowed_domains"]       # official sites only
+        assert web["submit_specs"]["strict"] and first["fallbacks"] == "default"
+        assert len(fake.calls) == 2 and fake.calls[1]["messages"][-1]["role"] == "assistant"  # resumed
+        # the same part number again (any spelling): from the cache, no new lookup or cost
+        j = c.post("/api/quote/specs", json={**REQ, "mpn": "21X8002RIV"}).json()
+        assert j["cached"] and j["cost_usd"] == 0 and len(fake.calls) == 2
+
+
+def test_specs_fall_back_to_the_supplier_page(tmp_path, monkeypatch, spec_shop):
+    monkeypatch.setattr(ai, "make_client", lambda key: FakeSpecs(found=False))
+    with specs_app(tmp_path, monkeypatch, spec_shop, env={"ANTHROPIC_API_KEY": "k"}) as c:
+        j = c.post("/api/quote/specs", json={**REQ, "url": spec_shop + "/p/1"}).json()
+        assert j["source"] == "דף המוצר אצל טכנו" and len(j["specs"]) == 3
+        assert j["specs"][0] == {"label": "דגם מעבד", "value": "Intel Core Ultra 5 225T"}
+        assert "לא נמצא" in j["ai_note"]
+
+
+def test_specs_without_key_or_page(tmp_path, monkeypatch, spec_shop):
+    with specs_app(tmp_path, monkeypatch, spec_shop) as c:
+        j = c.post("/api/quote/specs", json={**REQ, "url": spec_shop + "/p/1"}).json()
+        assert j["source"] == "דף המוצר אצל טכנו"                       # no key: the supplier's table
+        r = c.post("/api/quote/specs", json={**REQ, "mpn": "OTHER1", "site": "", "url": ""})
+        assert r.status_code == 404 and "מפתח API" in r.json()["detail"]
+
+
+
+def test_quote_never_names_the_supplier(tmp_path, monkeypatch, spec_shop):
+    with specs_app(tmp_path, monkeypatch, spec_shop) as c:
+        host = spec_shop.split("//")[1].split(":")[0]  # the supplier's host (127.0.0.1 here)
+        r = c.post("/api/quote/pdf", json={"items": [{"title": "PC", "qty": 1, "unit_price": 100,
+            "specs": [{"label": "מעבד", "value": "i5"}],
+            "spec_source": f"דף המוצר אצל טכנו · http://{host}/p/1"}]})
+        text = "".join(p.extract_text() for p in PdfReader(io.BytesIO(r.content)).pages)
+        assert "i5" in text and host not in text and "טכנו" not in text

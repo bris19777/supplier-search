@@ -291,3 +291,114 @@ async def ai_search(agg, api_key, request_text, in_stock_only=False, sites=None,
     return {"understanding": answer.get("understanding", ""), "matches": matches,
             "note": answer.get("note", ""), "searches": session.searches,
             "usage": {**usage, "cost_usd": round(cost, 4)}}
+
+
+# -- full technical specs from the manufacturer's own site, for price quotes ----------
+
+# Official manufacturer sites only (subdomains included, e.g. psref.lenovo.com)
+MANUFACTURER_DOMAINS = [
+    "lenovo.com", "hp.com", "dell.com", "asus.com", "acer.com", "msi.com", "gigabyte.com",
+    "samsung.com", "apple.com", "microsoft.com", "lg.com", "intel.com", "amd.com", "nvidia.com",
+    "kingston.com", "westerndigital.com", "seagate.com", "crucial.com", "logitech.com", "tp-link.com",
+    "ui.com", "epson.com", "brother.com", "canon.com", "benq.com", "viewsonic.com", "aoc.com",
+    "philips.com", "dahuasecurity.com", "hikvision.com", "apc.com", "eaton.com", "synology.com",
+    "qnap.com", "corsair.com", "razer.com", "steelseries.com", "jabra.com", "poly.com", "xiaomi.com",
+]
+
+SPECS_SYSTEM = """You look up the official technical specifications of one product on its manufacturer's \
+own website, for a price quote an Israeli computer shop gives its customer.
+
+Search for the exact model / manufacturer part number (for Lenovo the PSREF pages on psref.lenovo.com \
+list each model by part number). Use only what the official page states for this exact model or part \
+number; never fill in from similar models. Then call submit_specs once.
+
+Write each label in Hebrew (for example: מעבד, זיכרון, אחסון, מסך, כרטיס גרפי, מערכת הפעלה, רשת \
+אלחוטית, בלוטות', יציאות, מצלמה, סוללה, משקל, מידות, צבע, אחריות) and keep each value as the \
+manufacturer writes it (English technical terms are fine). Aim for the full spec sheet, typically 10-25 \
+rows. If no official page for this exact product can be found, call submit_specs with found=false."""
+
+SUBMIT_SPECS = {
+    "name": "submit_specs",
+    "description": "Submit the specifications found on the manufacturer's official page.",
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "found": {"type": "boolean"},
+            "model_name": {"type": "string", "description": "Model name as the manufacturer writes it"},
+            "source_url": {"type": "string", "description": "The official page the specs come from"},
+            "specs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}, "value": {"type": "string"}},
+                    "required": ["label", "value"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["found", "model_name", "source_url", "specs"],
+        "additionalProperties": False,
+    },
+}
+
+MAX_SPEC_ROUNDS = 6  # model turns, including resuming a paused server-side search
+
+
+async def manufacturer_specs(api_key, title, mpn="", brand=""):
+    """Look the product up on its manufacturer's site. Returns
+    {"found", "model_name", "source_url", "specs": [{label, value}], "cost_usd"}."""
+    client = make_client(api_key)
+    product = f"Product: {title}\nManufacturer part number: {mpn or '(unknown)'}\nBrand: {brand or '(unknown)'}"
+    messages = [{"role": "user", "content": product}]
+    tools = [
+        {"type": "web_search_20260209", "name": "web_search", "max_uses": 5,
+         "allowed_domains": MANUFACTURER_DOMAINS},
+        {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 6,
+         "allowed_domains": MANUFACTURER_DOMAINS, "max_content_tokens": 30000},
+        SUBMIT_SPECS,
+    ]
+    usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "searches": 0}
+    result = None
+    for _ in range(MAX_SPEC_ROUNDS):
+        try:
+            response = await client.beta.messages.create(
+                model=MODEL, max_tokens=16000, betas=[FALLBACK_BETA], fallbacks="default",
+                system=SPECS_SYSTEM, tools=tools, output_config={"effort": "medium"},
+                cache_control={"type": "ephemeral"}, messages=messages)
+        except anthropic.AuthenticationError:
+            raise AIError("מפתח ה-API של Anthropic שגוי או בוטל - יש לעדכן אותו בעמוד הניהול")
+        except anthropic.RateLimitError:
+            raise AIError("חריגה ממגבלת הקצב של Anthropic - נסה שוב בעוד דקה")
+        except anthropic.BadRequestError as e:
+            raise AIError(f"Anthropic דחה את הבקשה: {e.message}"[:300])
+        except anthropic.APIConnectionError:
+            raise AIError("אין חיבור ל-Anthropic")
+        except anthropic.APIStatusError as e:
+            raise AIError(f"שגיאה מ-Anthropic ({e.status_code}) - נסה שוב")
+        u = response.usage
+        usage["input"] += u.input_tokens or 0
+        usage["output"] += u.output_tokens or 0
+        usage["cache_read"] += getattr(u, "cache_read_input_tokens", 0) or 0
+        usage["cache_write"] += getattr(u, "cache_creation_input_tokens", 0) or 0
+        stu = getattr(u, "server_tool_use", None)
+        usage["searches"] += (getattr(stu, "web_search_requests", 0) or 0) if stu else 0
+        if response.stop_reason == "refusal":
+            raise AIError("הבקשה נדחתה על ידי מסנני הבטיחות של Anthropic")
+        submitted = next((b for b in response.content if b.type == "tool_use" and b.name == "submit_specs"), None)
+        if submitted is not None:
+            result = dict(submitted.input)
+            break
+        messages.append({"role": "assistant", "content": response.content})
+        if response.stop_reason == "pause_turn":
+            continue  # the server-side search loop paused; re-sending resumes it
+        # answered in prose instead of calling the tool: ask once more, briefly
+        messages.append({"role": "user", "content": "Call submit_specs with what you found."})
+    if result is None:
+        raise AIError("לא התקבל מפרט מה-AI - נסה שוב")
+    specs = [{"label": str(s.get("label", "")).strip()[:80], "value": str(s.get("value", "")).strip()[:300]}
+             for s in result.get("specs", []) if s.get("label") and s.get("value")][:60]
+    cost = (usage["input"] * PRICE_IN + usage["output"] * PRICE_OUT + usage["cache_read"] * PRICE_CACHE_READ
+            + usage["cache_write"] * PRICE_CACHE_WRITE) / 1e6 + usage["searches"] * 0.01  # $10 / 1000 searches
+    return {"found": bool(result.get("found")) and bool(specs), "model_name": result.get("model_name", ""),
+            "source_url": result.get("source_url", ""), "specs": specs, "cost_usd": round(cost, 4)}

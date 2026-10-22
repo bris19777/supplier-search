@@ -99,6 +99,19 @@ def parse_detail(html, detail):
     return specs
 
 
+def all_rows(html, detail):
+    """Every "label | value" row of the product page's spec table, for a full spec sheet."""
+    if not detail.get("rows"):
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for row in soup.select(detail["rows"]):
+        pair = _row_pairs(row)
+        if pair and pair[0].strip() and pair[1].strip():
+            out.append({"label": " ".join(pair[0].split())[:80], "value": " ".join(pair[1].split())[:300]})
+    return out[:60]
+
+
 # Products worth opening: computers and monitors whose title is missing a spec
 _COMPUTER = re.compile(r"מחשב|נייד|נייח|laptop|notebook|desktop|aio|all.in.one|thinkpad|ideapad|"
                        r"thinkcentre|thinkbook|vivobook|zenbook|probook|elitebook|latitude|vostro|"
