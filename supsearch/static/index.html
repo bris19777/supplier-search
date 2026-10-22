@@ -111,7 +111,7 @@
     </select>
     <label title="מתעלם מהאינדקס ומהזיכרון הזמני ומושך מחדש מכל האתרים"><input type="checkbox" id="refresh"> רענון מלא</label>
     <label title="למחשבים ומסכים שבשמם חסר מפרט: פותח את דף המוצר וקורא ממנו מעבד, זיכרון, אחסון ומסך. איטי יותר"><input type="checkbox" id="deep"> חיפוש מעמיק</label>
-    <span class="seg" id="basis"><button type="button" data-v="inc" class="on">כולל מע"מ</button><button type="button" data-v="ex">לפני מע"מ</button></span>
+    <span class="seg" id="basis"><button type="button" data-v="ex" class="on">לפני מע"מ</button><button type="button" data-v="inc">כולל מע"מ</button></span>
     <span class="seg" id="view"><button type="button" data-v="list" class="on">רשימה</button><button type="button" data-v="compare">השוואה</button></span>
     <button type="button" id="filtersToggle">סינון</button>
     <span id="egress" class="chip" hidden></span>
@@ -194,7 +194,7 @@
 
 <script>
 const $ = (s) => document.querySelector(s);
-const state = { view: "list", basis: "inc", facets: {}, sites: [], disabled: new Set(), expanded: new Set(), lastQuery: "" };
+const state = { view: "list", basis: "ex", facets: {}, sites: [], disabled: new Set(), expanded: new Set(), lastQuery: "" };
 const nf = new Intl.NumberFormat("he-IL", { maximumFractionDigits: 2 });
 
 // every API call: an expired or missing session goes back to the login page
@@ -241,14 +241,14 @@ function safeUrl(u) { return /^https?:\/\//i.test(u || "") ? u : "#"; }
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem("supsearch") || "{}");
-    if (p.basis) state.basis = p.basis;
+    if (p.priceBasis) state.basis = p.priceBasis;
     if (p.source) $("#source").value = p.source;
     if (p.view) state.view = p.view;
     (p.disabled || []).forEach(id => state.disabled.add(id));
   } catch (e) {}
 }
 function savePrefs() {
-  try { localStorage.setItem("supsearch", JSON.stringify({ basis: state.basis, view: state.view, source: $("#source").value, disabled: [...state.disabled] })); } catch (e) {}
+  try { localStorage.setItem("supsearch", JSON.stringify({ priceBasis: state.basis, view: state.view, source: $("#source").value, disabled: [...state.disabled] })); } catch (e) {}
 }
 
 function segment(id, key) {

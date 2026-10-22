@@ -140,7 +140,7 @@ $("#f").addEventListener("submit", async (e) => {
               ${p.mpn ? `<span>מק"ט יצרן: ${esc(p.mpn)}</span>` : ""}${specs(p)}</div>
             <div class="reason">${esc(p.reason)}</div>
           </div>
-          <div class="price"><b>${money(p.price_inc_vat)}</b>${p.price_ex_vat != null ? `<small>לפני מע"מ: ${money(p.price_ex_vat)}</small>` : ""}</div>
+          <div class="price"><b>${money(p.price_ex_vat)}</b>${p.price_inc_vat != null ? `<small>כולל מע"מ: ${money(p.price_inc_vat)}</small>` : ""}</div>
         </div>`).join("") : `<p>לא נמצאו מוצרים מתאימים.</p>`)
       + `<div class="foot">חיפושים שה-AI הריץ: ${j.searches.map(esc).join(" · ") || "—"}
          · עלות משוערת: $${j.usage.cost_usd.toFixed(3)}</div>`;
