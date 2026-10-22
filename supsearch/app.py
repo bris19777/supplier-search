@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from . import ai, config, filters, quote
+from . import ai, config, filters, quote, translate
 from .index import Crawler, Index, find
 from .tailscale import TailscaleWatch
 from .aggregator import Aggregator, page_urls
@@ -222,6 +222,7 @@ def create_app(sites_path=None, credentials_path=None):
         site: str = Field("", max_length=40)
         url: str = Field("", max_length=1000)
         refresh: bool = False
+        source: str = "auto"  # auto: the supplier's page, else the manufacturer | manufacturer
 
     class QuoteRequest(BaseModel):
         items: list[QuoteItem] = Field(min_length=1, max_length=50)
@@ -256,27 +257,20 @@ def create_app(sites_path=None, credentials_path=None):
 
     @app.post("/api/quote/specs")
     async def quote_specs(req: SpecsRequest, user=Depends(require_user)):
-        """The full spec sheet for a quote: from the manufacturer's site (AI web lookup, with
-        the API key), else the supplier's product page spec table. Cached per product."""
+        """The full spec sheet for a quote, in Hebrew. The supplier's product page first (free,
+        usually enough); the manufacturer's site through the AI when the supplier has no spec
+        table, or when asked for (source="manufacturer"). Cached per product and source."""
         store, agg = state["store"], state["agg"]
-        key = norm_mpn(req.mpn) or req.title.strip().lower()
+        mode = "manufacturer" if req.source == "manufacturer" else "auto"
+        key = f"{norm_mpn(req.mpn) or req.title.strip().lower()}|{mode}"
         cached = None if req.refresh else store.get_specs(key)
         if cached:
             return {**cached, "cached": True, "cost_usd": 0}
-        result, ai_note = None, ""
+        result, note, cost = None, "", 0.0
         api_key = ai_key()
-        if api_key:
-            try:
-                found = await ai.manufacturer_specs(api_key, req.title, req.mpn, req.brand)
-                if found["found"]:
-                    result = {"specs": found["specs"], "source": "אתר היצרן", "source_url": found["source_url"],
-                              "model_name": found["model_name"], "cost_usd": found["cost_usd"]}
-                else:
-                    ai_note = "לא נמצא דף מפרט רשמי אצל היצרן"
-            except ai.AIError as e:
-                ai_note = str(e)
+
         site = agg.site(req.site) if req.site else None
-        if result is None and site and (site.get("detail") or {}).get("rows") and req.url.startswith("http"):
+        if mode == "auto" and site and (site.get("detail") or {}).get("rows") and req.url.startswith("http"):
             timeout = int(site.get("timeout") or agg.settings.get("timeout", 30))
             page_site = {**site, "format": "html", "wait_for": site["detail"]["rows"]}
             try:
@@ -284,14 +278,38 @@ def create_app(sites_path=None, credentials_path=None):
                 rows = detail_rows(html, site["detail"])
                 if rows:
                     result = {"specs": rows, "source": f"דף המוצר אצל {site['name']}", "source_url": req.url,
-                              "model_name": "", "cost_usd": 0}
+                              "model_name": ""}
             except Exception:
                 pass
+        if result is None and api_key:
+            try:
+                found = await ai.manufacturer_specs(api_key, req.title, req.mpn, req.brand)
+                cost += found["cost_usd"]
+                if found["found"]:
+                    result = {"specs": found["specs"], "source": "אתר היצרן", "source_url": found["source_url"],
+                              "model_name": found["model_name"]}
+                else:
+                    note = "לא נמצא דף מפרט רשמי אצל היצרן"
+            except ai.AIError as e:
+                note = str(e)
         if result is None:
-            raise HTTPException(404, ai_note or ("לא נמצא מפרט מלא. כדי לחפש באתר היצרן צריך מפתח API "
-                                                 "(עמוד הניהול)" if not api_key else "לא נמצא מפרט מלא"))
-        store.put_specs(key, {k: v for k, v in result.items() if k != "cost_usd"})
-        return {**result, "cached": False, "ai_note": ai_note}
+            if not api_key and mode == "manufacturer":
+                raise HTTPException(400, "חיפוש באתר היצרן צריך מפתח API (עמוד הניהול)")
+            raise HTTPException(404, note or ("לספק אין טבלת מפרט לדגם הזה. כדי לחפש באתר היצרן צריך "
+                                              "מפתח API (עמוד הניהול)" if not api_key else "לא נמצא מפרט"))
+
+        # Hebrew: the dictionary always, then the AI for the rest when there's a key
+        result["specs"] = translate.dictionary(result["specs"])
+        result["translated"] = "dictionary"
+        if api_key:
+            try:
+                result["specs"], t_cost = await ai.translate_specs(api_key, result["specs"])
+                cost += t_cost
+                result["translated"] = "ai"
+            except ai.AIError as e:
+                note = note or str(e)
+        store.put_specs(key, result)
+        return {**result, "cached": False, "cost_usd": round(cost, 4), "ai_note": note}
 
     @app.post("/api/quote/pdf")
     async def quote_pdf(req: QuoteRequest, user=Depends(require_user)):

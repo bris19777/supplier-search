@@ -1,6 +1,7 @@
 """Price quotes (PDF) and per-user favourite suppliers."""
 
 import io
+import json
 
 import pytest
 import yaml
@@ -126,15 +127,23 @@ SPEC_PAGE = """<ul id="spec"><li><span>דגם מעבד</span><span>Intel Core Ul
 
 
 class FakeSpecs:
+    """Claude for the spec lookup (pauses once, then submits) and for the translation."""
+
     def __init__(self, found=True):
-        self.calls = []
+        self.calls, self.translations = [], []
         self.found = found
         self.beta = NS(messages=NS(create=self.create))
 
     async def create(self, **kw):
-        self.calls.append(kw)
         usage = NS(input_tokens=5000, output_tokens=800, cache_read_input_tokens=0,
                    cache_creation_input_tokens=0, server_tool_use=NS(web_search_requests=2))
+        if "format" in (kw.get("output_config") or {}):  # the translation call
+            rows = json.loads(kw["messages"][0]["content"])["rows"]
+            self.translations.append(rows)
+            out = [{"label": r["label"], "value": "בעברית: " + r["value"]} for r in rows]
+            return NS(stop_reason="end_turn", usage=usage,
+                      content=[NS(type="text", text=json.dumps({"rows": out}, ensure_ascii=False))])
+        self.calls.append(kw)
         if len(self.calls) == 1:  # the server-side search loop paused: resumed by re-sending
             return NS(stop_reason="pause_turn", usage=usage, content=[NS(type="server_tool_use")])
         return NS(stop_reason="tool_use", usage=usage, content=[NS(
@@ -186,13 +195,27 @@ def specs_app(tmp_path, monkeypatch, shop_url, env=None):
 REQ = {"title": "Lenovo ThinkPad L16", "mpn": "21X8-002RIV", "brand": "Lenovo", "site": "t"}
 
 
-def test_specs_from_the_manufacturer(tmp_path, monkeypatch, spec_shop):
+def test_specs_from_the_supplier_page_first(tmp_path, monkeypatch, spec_shop):
     fake = FakeSpecs()
     monkeypatch.setattr(ai, "make_client", lambda key: fake)
     with specs_app(tmp_path, monkeypatch, spec_shop, env={"ANTHROPIC_API_KEY": "k"}) as c:
         j = c.post("/api/quote/specs", json={**REQ, "url": spec_shop + "/p/1"}).json()
+        assert j["source"] == "דף המוצר אצל טכנו" and len(j["specs"]) == 3
+        assert fake.calls == []                                    # the manufacturer wasn't needed
+        assert j["translated"] == "ai" and j["specs"][0]["value"] == "בעברית: Intel Core Ultra 5 225T"
+        # the same part number again (any spelling): from the cache, no new calls or cost
+        j = c.post("/api/quote/specs", json={**REQ, "mpn": "21X8002RIV", "url": spec_shop + "/p/1"}).json()
+        assert j["cached"] and j["cost_usd"] == 0 and len(fake.translations) == 1
+
+
+def test_specs_from_the_manufacturer(tmp_path, monkeypatch, spec_shop):
+    fake = FakeSpecs()
+    monkeypatch.setattr(ai, "make_client", lambda key: fake)
+    with specs_app(tmp_path, monkeypatch, spec_shop, env={"ANTHROPIC_API_KEY": "k"}) as c:
+        # asked for explicitly (the supplier's table is skipped)
+        j = c.post("/api/quote/specs", json={**REQ, "url": spec_shop + "/p/1", "source": "manufacturer"}).json()
         assert j["source"] == "אתר היצרן" and j["source_url"] == "https://psref.lenovo.com/x"
-        assert j["specs"][0] == {"label": "מעבד", "value": "Intel Core Ultra 7 355"} and not j["cached"]
+        assert j["specs"][0] == {"label": "מעבד", "value": "בעברית: Intel Core Ultra 7 355"} and not j["cached"]
         assert j["cost_usd"] > 0
         first = fake.calls[0]
         web = {t["name"]: t for t in first["tools"]}
@@ -200,27 +223,36 @@ def test_specs_from_the_manufacturer(tmp_path, monkeypatch, spec_shop):
         assert "lenovo.com" in web["web_search"]["allowed_domains"]       # official sites only
         assert web["submit_specs"]["strict"] and first["fallbacks"] == "default"
         assert len(fake.calls) == 2 and fake.calls[1]["messages"][-1]["role"] == "assistant"  # resumed
-        # the same part number again (any spelling): from the cache, no new lookup or cost
-        j = c.post("/api/quote/specs", json={**REQ, "mpn": "21X8002RIV"}).json()
-        assert j["cached"] and j["cost_usd"] == 0 and len(fake.calls) == 2
+        # and automatically when the supplier has no spec table for the product
+        j = c.post("/api/quote/specs", json={**REQ, "mpn": "OTHER9", "site": "", "url": ""}).json()
+        assert j["source"] == "אתר היצרן"
 
 
-def test_specs_fall_back_to_the_supplier_page(tmp_path, monkeypatch, spec_shop):
-    monkeypatch.setattr(ai, "make_client", lambda key: FakeSpecs(found=False))
-    with specs_app(tmp_path, monkeypatch, spec_shop, env={"ANTHROPIC_API_KEY": "k"}) as c:
-        j = c.post("/api/quote/specs", json={**REQ, "url": spec_shop + "/p/1"}).json()
-        assert j["source"] == "דף המוצר אצל טכנו" and len(j["specs"]) == 3
-        assert j["specs"][0] == {"label": "דגם מעבד", "value": "Intel Core Ultra 5 225T"}
-        assert "לא נמצא" in j["ai_note"]
-
-
-def test_specs_without_key_or_page(tmp_path, monkeypatch, spec_shop):
+def test_specs_without_key_use_the_dictionary(tmp_path, monkeypatch, spec_shop):
     with specs_app(tmp_path, monkeypatch, spec_shop) as c:
         j = c.post("/api/quote/specs", json={**REQ, "url": spec_shop + "/p/1"}).json()
-        assert j["source"] == "דף המוצר אצל טכנו"                       # no key: the supplier's table
+        assert j["source"] == "דף המוצר אצל טכנו" and j["translated"] == "dictionary"
         r = c.post("/api/quote/specs", json={**REQ, "mpn": "OTHER1", "site": "", "url": ""})
         assert r.status_code == 404 and "מפתח API" in r.json()["detail"]
+        r = c.post("/api/quote/specs", json={**REQ, "source": "manufacturer"})
+        assert r.status_code == 400 and "מפתח API" in r.json()["detail"]
 
+
+def test_dictionary_translation():
+    from supsearch.translate import dictionary
+    rows = dictionary([{"label": "Processor", "value": "Intel Core Ultra 7 265T"},
+                       {"label": "Graphics", "value": "Integrated Intel Graphics"},
+                       {"label": "Color", "value": "Black"},
+                       {"label": "Memory Slots", "value": "Two DDR5 SODIMM slots, dual-channel capable"},
+                       {"label": "Max Memory", "value": "Up to 64GB"},
+                       {"label": "PDF File", "value": "download"},
+                       {"label": "זיכרון", "value": "16GB"}])
+    assert rows == [{"label": "מעבד", "value": "Intel Core Ultra 7 265T"},
+                    {"label": "כרטיס גרפי", "value": "משולב Intel Graphics"},
+                    {"label": "צבע", "value": "שחור"},
+                    {"label": "חריצי זיכרון", "value": "Two DDR5 SODIMM חריצים, תומך ערוץ כפול"},
+                    {"label": "זיכרון מקסימלי", "value": "עד 64GB"},
+                    {"label": "זיכרון", "value": "16GB"}]
 
 
 def test_quote_never_names_the_supplier(tmp_path, monkeypatch, spec_shop):

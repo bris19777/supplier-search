@@ -404,3 +404,50 @@ async def manufacturer_specs(api_key, title, mpn="", brand=""):
             + usage["cache_write"] * PRICE_CACHE_WRITE) / 1e6 + usage["searches"] * 0.01  # $10 / 1000 searches
     return {"found": bool(result.get("found")) and bool(specs), "model_name": result.get("model_name", ""),
             "source_url": result.get("source_url", ""), "specs": specs, "cost_usd": round(cost, 4)}
+
+
+# -- translating a spec sheet to Hebrew, for quotes -------------------------------------
+
+TRANSLATE_SYSTEM = """Translate a computer product's spec sheet to Hebrew for a price quote an Israeli \
+shop gives its customer. Return exactly the same rows in the same order. Write every label in Hebrew. \
+In values, translate the descriptive words to Hebrew and keep model names, part numbers, technology \
+names and units as written (for example "Intel Core Ultra 7 265T", "DDR5-5600", "Wi-Fi 6E", "USB-C", \
+"16GB", "1920x1080"). Use natural Hebrew a customer would read; don't add or drop information."""
+
+TRANSLATE_FORMAT = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {"rows": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"label": {"type": "string"}, "value": {"type": "string"}},
+            "required": ["label", "value"], "additionalProperties": False}}},
+        "required": ["rows"],
+        "additionalProperties": False,
+    },
+}
+
+
+async def translate_specs(api_key, rows):
+    """(rows in Hebrew, cost) - the same rows in the same order; raises AIError."""
+    client = make_client(api_key)
+    try:
+        response = await client.beta.messages.create(
+            model=MODEL, max_tokens=16000, betas=[FALLBACK_BETA], fallbacks="default",
+            system=TRANSLATE_SYSTEM, output_config={"effort": "low", "format": TRANSLATE_FORMAT},
+            messages=[{"role": "user", "content": json.dumps({"rows": rows}, ensure_ascii=False)}])
+    except anthropic.APIError as e:
+        raise AIError(f"התרגום נכשל: {type(e).__name__}"[:200])
+    if response.stop_reason in ("refusal", "max_tokens"):
+        raise AIError("התרגום נכשל")
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    try:
+        out = json.loads(text)["rows"]
+    except (ValueError, KeyError, TypeError):
+        raise AIError("התרגום נכשל")
+    if len(out) != len(rows):
+        raise AIError("התרגום החזיר מספר שורות שונה")
+    u = response.usage
+    cost = ((u.input_tokens or 0) * PRICE_IN + (u.output_tokens or 0) * PRICE_OUT) / 1e6
+    return ([{"label": str(r["label"]).strip()[:80], "value": str(r["value"]).strip()[:300]} for r in out],
+            round(cost, 4))

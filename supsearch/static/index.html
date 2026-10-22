@@ -177,7 +177,8 @@
     <label>הערות <textarea id="qNotes" rows="2" maxlength="1000" placeholder="למשל: כולל התקנה, אחריות 3 שנים"></textarea></label>
     <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qImage" checked> להציג תמונת מוצר</label>
     <div class="specbox">
-      <div class="row"><button type="button" id="qSpecsBtn" title="מחפש את דף המפרט הרשמי של הדגם באתר היצרן (בעזרת ה-AI)">הבא מפרט טכני מלא מהיצרן</button>
+      <div class="row"><button type="button" id="qSpecsBtn" title="לוקח את טבלת המפרט מדף המוצר אצל הספק, בעברית">הבא מפרט טכני</button>
+        <button type="button" id="qSpecsMfr" title="מחפש את דף המפרט הרשמי של הדגם באתר היצרן (בעזרת ה-AI, כמה סנטים)">חפש באתר היצרן</button>
         <span class="cost" id="qSpecsMsg"></span></div>
       <label id="qSpecsWrap" hidden>מפרט טכני (שורה לכל פרט, "שם: ערך". אפשר לערוך)
         <textarea id="qSpecs" rows="8" dir="auto"></textarea></label>
@@ -555,25 +556,29 @@ function specsFromText() {
                  : { label: "", value: l.slice(0, 300) };
   }).filter(r => r.value).map(r => ({ label: r.label || "•", value: r.value })).slice(0, 60);
 }
-$("#qSpecsBtn").addEventListener("click", async () => {
-  const btn = $("#qSpecsBtn"), msg = $("#qSpecsMsg");
-  btn.disabled = true; msg.innerHTML = `<span class="spinner"></span> מחפש באתר היצרן… (עד דקה)`;
+async function fetchSpecs(source) {
+  const msg = $("#qSpecsMsg");
+  $("#qSpecsBtn").disabled = $("#qSpecsMfr").disabled = true;
+  msg.innerHTML = `<span class="spinner"></span> ${source === "manufacturer" ? "מחפש באתר היצרן… (עד דקה)" : "מביא מפרט…"}`;
   try {
     const j = await api("api/quote/specs", { method: "POST", body: JSON.stringify({
       title: quoteProduct.title, mpn: quoteProduct.mpn || "", brand: quoteProduct.brand || "",
-      site: quoteProduct.site, url: quoteProduct.url || "" }) });
+      site: quoteProduct.site, url: quoteProduct.url || "", source }) });
     $("#qSpecs").value = j.specs.map(r => `${r.label}: ${r.value}`).join("\n");
     $("#qSpecsWrap").hidden = false;
     // only the manufacturer is named as the source; the supplier never appears on a quote
     specSource = j.source === "אתר היצרן" ? (j.source_url ? `${j.source} · ${j.source_url}` : j.source) : "";
-    msg.textContent = `${j.specs.length} פרטים · מקור: ${j.source}` + (j.cached ? " · נשמר מקודם"
+    const tr = j.translated === "ai" ? "תורגם לעברית" : "תורגם חלקית (בלי מפתח AI)";
+    msg.textContent = `${j.specs.length} פרטים · מקור: ${j.source} · ${tr}` + (j.cached ? " · נשמר מקודם"
       : j.cost_usd ? ` · עלות: $${j.cost_usd.toFixed(3)}` : "") + (j.ai_note ? ` (${j.ai_note})` : "");
   } catch (ex) {
     msg.textContent = ex.message;
   } finally {
-    btn.disabled = false;
+    $("#qSpecsBtn").disabled = $("#qSpecsMfr").disabled = false;
   }
-});
+}
+$("#qSpecsBtn").addEventListener("click", () => fetchSpecs("auto"));
+$("#qSpecsMfr").addEventListener("click", () => fetchSpecs("manufacturer"));
 $("#results").addEventListener("click", async e => {
   const i = e.target.dataset.quote; if (i === undefined) return;
   quoteProduct = state.quoteItems[Number(i)];
