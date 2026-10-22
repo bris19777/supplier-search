@@ -14,6 +14,7 @@ import json
 import anthropic
 
 from . import filters
+from .index import find
 
 MODEL = "claude-opus-5-5"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -137,9 +138,10 @@ def _compact(pid, p):
 class _Session:
     """Tool calls for one AI search; products get short ids Claude refers back to."""
 
-    def __init__(self, agg, sites):
+    def __init__(self, agg, sites, index=None):
         self.agg = agg
         self.sites = sites
+        self.index = index
         self.products = {}   # id -> product dict
         self._ids = {}       # product key -> id
         self.searches = []
@@ -152,12 +154,11 @@ class _Session:
             self.products[pid] = product
         return self._ids[key]
 
-    async def search_suppliers(self, query, in_stock_only):
-        query = query.strip()
-        if not query:
-            return "Error: empty query", True
-        self.searches.append(query)
-        results = await self.agg.search(query, only=self.sites)
+    async def _search(self, query):
+        max_age = float(self.agg.settings.get("index", {}).get("max_age_days", 3))
+        return await find(self.agg, self.index, query, only=self.sites, max_age_days=max_age)
+
+    def _search_result(self, query, in_stock_only, results):
         products = [p.to_dict() for r in results for p in r.items]
         items, _, _ = filters.apply(products, query, {"in_stock": in_stock_only})
         out = [_compact(self._register(p), p) for p in items[:RESULTS_PER_SEARCH]]
@@ -182,25 +183,41 @@ class _Session:
         p["specs"] = merged
         return json.dumps({"specs": merged}, ensure_ascii=False), False
 
-    async def run_tool(self, block):
-        try:
-            if block.name == "search_suppliers":
-                text, err = await self.search_suppliers(block.input["query"], block.input["in_stock_only"])
-            elif block.name == "product_details":
-                text, err = await self.product_details(block.input["product_id"])
+    async def run_tools(self, calls):
+        """Run one turn's tool calls. The slow part (searching, opening pages) runs in
+        parallel; results are then built in call order, so product ids are deterministic."""
+        async def fetch(block):
+            try:
+                if block.name == "search_suppliers":
+                    query = block.input["query"].strip()
+                    return await self._search(query) if query else ValueError("empty query")
+                if block.name == "product_details":
+                    return await self.product_details(block.input["product_id"])
+                return ValueError(f"unknown tool {block.name}")
+            except Exception as e:  # a failing tool is reported to Claude, not raised
+                return e
+
+        fetched = await asyncio.gather(*(fetch(b) for b in calls))
+        out = []
+        for block, got in zip(calls, fetched):
+            if isinstance(got, Exception):
+                text, err = f"Error: {type(got).__name__}: {got}"[:500], True
+            elif block.name == "search_suppliers":
+                self.searches.append(block.input["query"].strip())
+                text, err = self._search_result(block.input["query"].strip(),
+                                                block.input["in_stock_only"], got)
             else:
-                text, err = f"Error: unknown tool {block.name}", True
-        except Exception as e:  # a failing tool is reported to Claude, not raised
-            text, err = f"Error: {type(e).__name__}: {e}"[:500], True
-        result = {"type": "tool_result", "tool_use_id": block.id, "content": text}
-        if err:
-            result["is_error"] = True
-        return result
+                text, err = got
+            result = {"type": "tool_result", "tool_use_id": block.id, "content": text}
+            if err:
+                result["is_error"] = True
+            out.append(result)
+        return out
 
 
-async def ai_search(agg, api_key, request_text, in_stock_only=True, sites=None):
+async def ai_search(agg, api_key, request_text, in_stock_only=True, sites=None, index=None):
     """Run the search conversation. Returns the answer with full product dicts."""
-    session = _Session(agg, sites)
+    session = _Session(agg, sites, index)
     client = make_client(api_key)
     hint = "" if in_stock_only else "\n\n(Include out-of-stock products too.)"
     messages = [{"role": "user", "content": request_text.strip() + hint}]
@@ -252,8 +269,8 @@ async def ai_search(agg, api_key, request_text, in_stock_only=True, sites=None):
         if response.stop_reason != "tool_use":
             break
         calls = [b for b in response.content if b.type == "tool_use"]
-        results = await asyncio.gather(*(session.run_tool(b) for b in calls))
-        messages.append({"role": "user", "content": list(results)})  # all results in one message
+        results = await session.run_tools(calls)
+        messages.append({"role": "user", "content": results})  # all results in one message
 
     text = next((b.text for b in response.content if b.type == "text"), "")
     try:

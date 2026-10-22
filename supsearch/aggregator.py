@@ -28,11 +28,11 @@ DETAIL_TTL = 24 * 3600  # product specs hardly change; reopen a page at most dai
 BOI_RATE_URL = "https://boi.org.il/PublicApi/GetExchangeRate?key={currency}"
 
 
-def page_urls(site, query):
+def page_urls(site, query, pages=None):
     q = quote_plus(query.strip())
     urls = [site["search_url"].replace("{query}", q)]
     if site.get("page_url"):
-        for n in range(2, int(site.get("pages", 1)) + 1):
+        for n in range(2, int(pages or site.get("pages", 1)) + 1):
             urls.append(site["page_url"].replace("{query}", q).replace("{page}", str(n)))
     return urls
 
@@ -81,7 +81,7 @@ class Aggregator:
                                           check_login=first_page)
         return await self.http.get(site, url, timeout)
 
-    async def search_site(self, site, query, refresh=False):
+    async def search_site(self, site, query, refresh=False, pages=None):
         key = (site["id"], query.strip().lower())
         ttl = float(self.settings.get("cache_minutes", 10)) * 60
         hit = self._cache.get(key)
@@ -99,7 +99,7 @@ class Aggregator:
         try:
             async def run():
                 seen = set()
-                for n, url in enumerate(page_urls(site, query)):
+                for n, url in enumerate(page_urls(site, query, pages)):
                     try:
                         content = await self.fetch(site, url, timeout, first_page=n == 0)
                     except NeedsLogin as e:
@@ -117,7 +117,7 @@ class Aggregator:
                     res.items.extend(found)
                     if site.get("page_size") and len(found) < int(site["page_size"]):
                         break  # a short page is the last one
-            await asyncio.wait_for(run(), timeout=timeout * max(1, len(page_urls(site, query))))
+            await asyncio.wait_for(run(), timeout=timeout * max(1, len(page_urls(site, query, pages))))
         except NeedsLogin as e:
             res.needs_login = True
             res.ok = False

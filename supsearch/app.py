@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from . import ai, config, filters
+from .index import Crawler, Index, find
 from .aggregator import Aggregator, page_urls
 from .config import load_credentials, load_sites
 from .parse import parse_results
@@ -67,8 +68,13 @@ def create_app(sites_path=None, credentials_path=None):
         state["store"] = store
         state["agg"] = Aggregator(settings, sites, Credentials(store, load_credentials(credentials_path)))
         state["tasks"] = set()
+        state["index"] = Index(os.path.join(config.DATA_DIR, "index.sqlite"))
+        state["crawler"] = Crawler(state["agg"], state["index"], settings["index"])
+        state["crawler"].start()
         yield
+        await state["crawler"].stop()
         await state["agg"].close()
+        state["index"].close()
 
     def current_user(request):
         store = state["store"]
@@ -244,6 +250,7 @@ def create_app(sites_path=None, credentials_path=None):
         except StoreError as e:
             raise HTTPException(400, str(e))
         await state["agg"].forget(site_id)
+        await asyncio.to_thread(state["index"].drop_site, site_id)  # re-index with the new login
         return {"ok": True}
 
     @app.delete("/api/admin/suppliers/{site_id}")
@@ -251,6 +258,7 @@ def create_app(sites_path=None, credentials_path=None):
         known_site(site_id)
         state["store"].delete_supplier_login(site_id)
         await state["agg"].forget(site_id)
+        await asyncio.to_thread(state["index"].drop_site, site_id)  # re-index with the new login
         return {"ok": True}
 
     @app.post("/api/admin/suppliers/{site_id}/test")
@@ -283,6 +291,7 @@ def create_app(sites_path=None, credentials_path=None):
         basis: str = "inc"          # inc | ex  (price with / without VAT)
         sort: str = "relevance"
         deep: bool = False          # read missing specs from the product pages (slower)
+        source: str = "auto"        # auto | index | live  (see index.find)
 
     class CaptureRequest(BaseModel):
         query: str
@@ -314,9 +323,34 @@ def create_app(sites_path=None, credentials_path=None):
             raise HTTPException(400, "חיפוש AI לא הוגדר - מנהל צריך לשמור מפתח API בעמוד הניהול")
         try:
             return await ai.ai_search(state["agg"], key, req.query, req.in_stock_only,
-                                      set(req.sites) or None)
+                                      set(req.sites) or None, index=state["index"])
         except ai.AIError as e:
             raise HTTPException(502, str(e))
+
+    # -- admin: local index ---------------------------------------------------------
+
+    @app.get("/api/admin/index")
+    async def index_status(admin=Depends(require_admin)):
+        agg, crawler = state["agg"], state["crawler"]
+        stats = await asyncio.to_thread(state["index"].stats)
+        return {
+            "settings": {k: crawler.settings[k] for k in ("enabled", "every_hours", "pages", "deep",
+                                                           "max_age_days")},
+            "queries": len(crawler.queries),
+            "status": crawler.status,
+            "sites": [{"id": s["id"], "name": s["name"], **stats.get(s["id"], {"products": 0})}
+                      for s in agg.enabled_sites()],
+        }
+
+    @app.post("/api/admin/index/run")
+    async def index_run(admin=Depends(require_admin)):
+        crawler = state["crawler"]
+        if crawler.status["running"]:
+            return {"ok": True, "message": "העדכון כבר רץ"}
+        task = asyncio.create_task(crawler.run())
+        state["tasks"].add(task)
+        task.add_done_callback(state["tasks"].discard)
+        return {"ok": True, "message": "עדכון האינדקס התחיל ברקע"}
 
     @app.get("/api/admin/ai-key")
     async def ai_key_status(admin=Depends(require_admin)):
@@ -362,9 +396,13 @@ def create_app(sites_path=None, credentials_path=None):
         if not query:
             raise HTTPException(400, "יש להזין מילת חיפוש")
         agg = state["agg"]
-        results = await agg.search(query, only=set(req.sites) or None, refresh=req.refresh)
+        max_age = float(agg.settings["index"].get("max_age_days", 3))
+        results = await find(agg, state["index"], query, only=set(req.sites) or None,
+                             source=req.source, refresh=req.refresh, max_age_days=max_age)
         if req.deep:
             await agg.deepen(results)
+            # keep the specs read from product pages; not a new sighting of the price
+            await asyncio.to_thread(state["index"].upsert_results, results, False)
         products = [p.to_dict() for r in results for p in r.items]
         f = req.model_dump()
         items, facets, price_range = filters.apply(products, query, f)

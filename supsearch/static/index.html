@@ -86,7 +86,11 @@
     <h1>חיפוש ספקים</h1>
     <input id="q" type="search" placeholder="שם מוצר, דגם או מק&quot;ט יצרן…" autocomplete="off" autofocus>
     <button class="primary" type="submit" id="go">חפש</button>
-    <label title="מתעלם מהזיכרון הזמני ומושך מחדש מכל האתרים"><input type="checkbox" id="refresh"> רענון מלא</label>
+    <select id="source" title="אינדקס: תשובה מיידית מהמוצרים שנאספו (עד כמה שעות אחורה). חי: חיפוש באתרי הספקים עכשיו">
+      <option value="auto">מקור: אינדקס (מהיר)</option>
+      <option value="live">מקור: חי מהאתרים</option>
+    </select>
+    <label title="מתעלם מהאינדקס ומהזיכרון הזמני ומושך מחדש מכל האתרים"><input type="checkbox" id="refresh"> רענון מלא</label>
     <label title="למחשבים ומסכים שבשמם חסר מפרט: פותח את דף המוצר וקורא ממנו מעבד, זיכרון, אחסון ומסך. איטי יותר"><input type="checkbox" id="deep"> חיפוש מעמיק</label>
     <span class="seg" id="basis"><button type="button" data-v="inc" class="on">כולל מע"מ</button><button type="button" data-v="ex">לפני מע"מ</button></span>
     <span class="seg" id="view"><button type="button" data-v="list" class="on">רשימה</button><button type="button" data-v="compare">השוואה</button></span>
@@ -174,6 +178,11 @@ async function loadMe() {
 }
 
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function ago(sec) {
+  if (sec < 3600) return `לפני ${Math.max(1, Math.round(sec / 60))} דק'`;
+  if (sec < 86400) return `לפני ${Math.round(sec / 3600)} שע'`;
+  return `לפני ${Math.round(sec / 86400)} ימים`;
+}
 function money(v) { return v == null ? "—" : "₪" + nf.format(v); }
 function safeUrl(u) { return /^https?:\/\//i.test(u || "") ? u : "#"; }
 
@@ -181,12 +190,13 @@ function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem("supsearch") || "{}");
     if (p.basis) state.basis = p.basis;
+    if (p.source) $("#source").value = p.source;
     if (p.view) state.view = p.view;
     (p.disabled || []).forEach(id => state.disabled.add(id));
   } catch (e) {}
 }
 function savePrefs() {
-  try { localStorage.setItem("supsearch", JSON.stringify({ basis: state.basis, view: state.view, disabled: [...state.disabled] })); } catch (e) {}
+  try { localStorage.setItem("supsearch", JSON.stringify({ basis: state.basis, view: state.view, source: $("#source").value, disabled: [...state.disabled] })); } catch (e) {}
 }
 
 function segment(id, key) {
@@ -218,6 +228,7 @@ function renderSites(results) {
     if (r && !off) {
       if (r.needs_login) { cls += " login"; info = `${r.count} · לא מחובר, בלי מחירים`; }
       else if (!r.ok || r.error) { cls += " err"; info = "שגיאה"; }
+      else if (r.from_index) { cls += " ok"; info = `${r.count} · אינדקס${r.count ? " · " + ago(r.index_age) : ""}${r.deep_filled ? ` · מפרט ל-${r.deep_filled}` : ""}`; }
       else { cls += " ok"; info = `${r.count} · ${r.elapsed} שנ'${r.cached ? " · זיכרון" : ""}${r.deep_filled ? ` · מפרט ל-${r.deep_filled}` : ""}`; }
     }
     const title = esc((r && r.error) || s.notes || "");
@@ -249,7 +260,7 @@ function request(refresh) {
     in_stock: $("#instock").checked, has_price: $("#hasprice").checked,
     include: $("#include").value, exclude: $("#exclude").value,
     min_relevance: $("#relevant").checked ? 1 : 0,
-    basis: state.basis, sort: $("#sort").value, deep: $("#deep").checked,
+    basis: state.basis, sort: $("#sort").value, deep: $("#deep").checked, source: $("#source").value,
   };
 }
 
@@ -359,7 +370,8 @@ $("#facets").addEventListener("click", e => {
 let timer;
 function debounced() { clearTimeout(timer); timer = setTimeout(() => run(false), 400); }
 ["#pmin", "#pmax", "#include", "#exclude"].forEach(id => $(id).addEventListener("input", debounced));
-["#instock", "#hasprice", "#relevant", "#sort", "#deep"].forEach(id => $(id).addEventListener("change", () => run(false)));
+["#instock", "#hasprice", "#relevant", "#sort", "#deep", "#source"].forEach(id => $(id).addEventListener("change", () => run(false)));
+$("#source").addEventListener("change", () => { savePrefs(); state.lastQuery = ""; });
 $("#clear").addEventListener("click", () => {
   state.facets = {};
   ["#pmin", "#pmax", "#include", "#exclude"].forEach(id => $(id).value = "");

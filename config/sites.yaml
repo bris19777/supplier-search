@@ -15,6 +15,21 @@ settings:
   rates:              # used only if the Bank of Israel rate can't be fetched
     USD: 3.7
 
+# Local index (supsearch/index.py): searches answer from the products collected here, in
+# milliseconds. A background crawl runs these queries at every site to cover the catalogs.
+index:
+  enabled: true
+  every_hours: 12        # how often the crawl runs
+  pages: 5               # result pages per query during the crawl
+  deep: false            # also read specs from product pages during the crawl (slower, more requests)
+  max_age_days: 3        # products not seen for longer are not answered from the index
+  prune_days: 14         # and are deleted after this
+  pause_seconds: 1       # between requests to the same site
+  queries: [lenovo, hp, dell, asus, acer, msi, gigabyte, samsung, apple, microsoft, logitech,
+            kingston, western digital, seagate, tp-link, ubiquiti, epson, brother,
+            מחשב נייד, מחשב נייח, laptop, notebook, desktop, מסך, monitor, ssd, nvme, ddr5, ddr4,
+            rtx, כרטיס מסך, מדפסת, printer, מקלדת, עכבר, ups, switch, router]
+
 sites:
   - id: techno
     name: טכנו-רצף
@@ -177,6 +192,10 @@ sites:
       password: "input#Password"
       submit: "button.login-button"
       logged_in: "a.ico-logout"                             # unverified
+    # titles are English and queries need 3+ characters
+    index_queries: [lenovo, dell, asus, acer, msi, gigabyte, samsung, apple, microsoft, logitech,
+                    kingston, laptop, notebook, desktop, monitor, ssd, nvme, ddr5, rtx, printer,
+                    keyboard, mouse, ups, switch, router]
     notes: >-
       nopCommerce, prices for resellers only. Titles are in English (Hebrew queries find
       nothing) and a query needs at least 3 characters. 21 items per page.

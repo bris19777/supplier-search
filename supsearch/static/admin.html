@@ -77,6 +77,22 @@
   </section>
 
   <section>
+    <h2>אינדקס מקומי</h2>
+    <p class="hint">המערכת שומרת אצלה את המוצרים של כל הספקים, כך שחיפוש עונה מיד במקום לחכות לאתרים.
+      האינדקס מתעדכן מעצמו ברקע (<span id="ixEvery"></span>), וגם מכל חיפוש חי. מוצר שלא נראה כמה ימים
+      לא מוצג מהאינדקס, והחיפוש עובר לאתרים.</p>
+    <table>
+      <thead><tr><th>ספק</th><th>מוצרים באינדקס</th><th>עדכון אחרון</th><th>התקדמות</th></tr></thead>
+      <tbody id="ixSites"></tbody>
+    </table>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="ixRun">עדכון האינדקס עכשיו</button>
+      <span id="ixStatus" class="hint"></span>
+    </div>
+    <div class="msg" id="ixMsg"></div>
+  </section>
+
+  <section>
     <h2>סיסמאות לאתרי הספקים</h2>
     <p class="hint">משותפות לכל המשתמשים. הסיסמאות נשמרות מוצפנות בשרת, ואף משתמש לא יכול לראות אותן,
       גם לא מנהל. הן משמשות רק את השרת להתחברות לספקים. כדי לשנות שם משתמש בלבד, השאר את שדה
@@ -224,6 +240,34 @@ $("#newUser").addEventListener("submit", async (e) => {
   } catch (ex) { say($("#nuMsg"), ex.message, false); }
 });
 
+function when(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  return d.toLocaleString("he-IL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+let ixTimer = null;
+async function loadIndex() {
+  const j = await api("api/admin/index");
+  const st = j.status;
+  $("#ixEvery").textContent = j.settings.enabled ? `כל ${j.settings.every_hours} שעות, ${j.queries} חיפושים לכל ספק` : "העדכון האוטומטי כבוי";
+  $("#ixSites").innerHTML = j.sites.map(s => {
+    const pr = st.progress[s.id];
+    const prog = pr ? (pr.done < pr.total ? `${pr.done}/${pr.total} חיפושים` : `הסתיים · ${pr.found} נמצאו`) : "";
+    return `<tr><td><b>${esc(s.name)}</b></td><td>${s.products.toLocaleString("he-IL")}</td><td>${when(s.newest)}</td><td>${esc(prog)}</td></tr>`;
+  }).join("");
+  $("#ixRun").disabled = st.running;
+  $("#ixStatus").textContent = st.running ? `מתעדכן… (התחיל ${when(st.started)})`
+    : st.finished ? `עדכון אחרון הסתיים ${when(st.finished)} · ${st.last_added >= 0 ? "+" : ""}${st.last_added} מוצרים`
+      + (st.errors.length ? ` · ${st.errors.length} שגיאות` : "") : "";
+  $("#ixStatus").title = st.errors.join("\n");
+  clearTimeout(ixTimer);
+  if (st.running) ixTimer = setTimeout(loadIndex, 3000);  // follow the crawl while it runs
+}
+$("#ixRun").onclick = async () => {
+  try { const j = await api("api/admin/index/run", { method: "POST" }); say($("#ixMsg"), j.message, true); loadIndex(); }
+  catch (e) { say($("#ixMsg"), e.message, false); }
+};
+
 async function loadAiKey() {
   const j = await api("api/admin/ai-key");
   const st = $("#aiStatus");
@@ -251,7 +295,7 @@ $("#aiDel").onclick = async () => {
   catch (e) { say($("#aiMsg"), e.message, false); }
 };
 
-loadMe().then(() => Promise.all([loadAiKey(), loadSuppliers(), loadUsers()])).catch(() => {});
+loadMe().then(() => Promise.all([loadAiKey(), loadIndex(), loadSuppliers(), loadUsers()])).catch(() => {});
 </script>
 </body>
 </html>

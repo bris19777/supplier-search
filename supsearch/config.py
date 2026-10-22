@@ -29,6 +29,9 @@ def load_sites(path=None):
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     settings = {**DEFAULT_SETTINGS, **(raw.get("settings") or {})}
+    settings["index"] = raw.get("index") or {}  # local index / background crawl, see index.py
+    if os.environ.get("INDEX_CRAWL") == "0":
+        settings["index"]["enabled"] = False
     # On Fly the container's start script points this at Tailscale's local proxy,
     # so the suppliers see the office IP (the office PC is the Tailscale exit node)
     if os.environ.get("OUTBOUND_PROXY"):
