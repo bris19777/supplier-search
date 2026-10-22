@@ -581,6 +581,7 @@ def create_app(sites_path=None, credentials_path=None):
         max_age = float(agg.settings["index"].get("max_age_days", 3))
         results = await find(agg, state["index"], query, only=set(req.sites) or None,
                              source=req.source, refresh=req.refresh, max_age_days=max_age)
+        rates = await agg.apply_rates(results)  # today's rate, also for index results
         if req.deep:
             await agg.deepen(results)
             # keep the specs read from product pages; not a new sighting of the price
@@ -595,6 +596,7 @@ def create_app(sites_path=None, credentials_path=None):
             "sites": [r.summary() for r in results],
             "facets": facets,
             "price_range": price_range,
+            "rates": rates,
         }
         if req.view == "compare":
             body["groups"] = filters.group(items, req.basis)[:MAX_ITEMS]

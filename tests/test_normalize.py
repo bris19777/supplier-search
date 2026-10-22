@@ -155,3 +155,12 @@ def test_bare_units_need_a_computer_title():
     assert extract_specs("ThinkPad i5 4G LTE 16G 512G")["ram"] == "16GB"  # 4G LTE is the modem
     from supsearch.normalize import canonical_brand
     assert canonical_brand("barkan") == "Barkan"
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("$1,234.00", "USD"), ("1,234 USD", "USD"), ("₪1,234", "ILS"), ('1,234 ש"ח', "ILS"),
+    ("€99", "EUR"), ("1,234.00", None), ("", None),
+])
+def test_detect_currency(text, expected):
+    from supsearch.normalize import detect_currency
+    assert detect_currency(text) == expected

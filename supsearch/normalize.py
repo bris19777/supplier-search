@@ -29,6 +29,18 @@ def parse_price(text):
     return value if value > 0 else None
 
 
+def detect_currency(text):
+    """The currency a price is written in, from its symbol; None when it doesn't say."""
+    t = str(text or "")
+    if "$" in t or re.search(r"\bUSD\b|דולר", t, re.I):
+        return "USD"
+    if "€" in t or re.search(r"\bEUR\b|יורו", t, re.I):
+        return "EUR"
+    if "₪" in t or re.search(r"\b(?:ILS|NIS)\b|ש\"ח|ש״ח|שקל", t, re.I):
+        return "ILS"
+    return None
+
+
 def with_vat(price, vat_included, vat_rate=VAT_RATE):
     """Return (price_inc_vat, price_ex_vat) from a price and whether it includes VAT."""
     if price is None:

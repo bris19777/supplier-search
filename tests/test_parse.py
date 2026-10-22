@@ -97,3 +97,14 @@ def test_field_value_map():
     html = ('<div class="c"><b>A</b><i class="s">1</i></div><div class="c"><b>B</b><i class="s">0</i></div>'
             '<div class="c"><b>C</b><i class="s">2</i></div>')
     assert [p.in_stock for p in parse_results(html, site, "https://v/")] == [True, False, False]
+
+
+def test_currency_from_the_price_symbol():
+    site = {"id": "t", "name": "T", "item": ".c", "currency": "USD", "vat_included": False,
+            "fields": {"title": "b", "price": ".p"}}
+    html = ('<div class="c"><b>A</b><span class="p">$100.00</span></div>'
+            '<div class="c"><b>B</b><span class="p">₪100.00</span></div>'      # symbol beats the default
+            '<div class="c"><b>C</b><span class="p">100.00</span></div>')      # no symbol: site default
+    a, b, c = parse_results(html, site, "https://t/", rates={"USD": 3.5})
+    assert (a.currency, b.currency, c.currency) == ("USD", "ILS", "USD")
+    assert a.price_ex_vat == 350.0 and b.price_ex_vat == 100.0

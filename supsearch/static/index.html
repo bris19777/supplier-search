@@ -411,7 +411,9 @@ function render(j) {
   const guests = j.sites.filter(s => s.needs_login).length;
   $("#count").textContent = `${j.matched} מתוך ${j.total} תוצאות מ-${j.sites.length} ספקים`
     + (guests ? ` · ${guests} לא מחוברים (בלי מחירים)` : "")
-    + (failed ? ` · ${failed} עם שגיאה (פרטים במעבר עכבר)` : "");
+    + (failed ? ` · ${failed} עם שגיאה (פרטים במעבר עכבר)` : "")
+    + Object.entries(j.rates || {}).map(([cur, r]) =>
+        ` · ${cur === "USD" ? "דולר" : cur} ${r.rate} ₪ (${r.source}${r.date ? ", " + r.date.split("-").reverse().join("/") : ""})`).join("");
   renderFacets(j.facets);
   if (j.price_range) {
     $("#pmin").placeholder = "מ-" + Math.floor(j.price_range[0]);
@@ -581,6 +583,8 @@ $("#results").addEventListener("click", async e => {
   $("#qQty").value = 1;
   $("#qCost").textContent = quoteProduct.price_ex_vat != null
     ? `עלות אצל ${quoteProduct.site_name}: ${money(quoteProduct.price_ex_vat)} לפני מע"מ`
+      + (quoteProduct.currency && quoteProduct.currency !== "ILS" && quoteProduct.price != null
+         ? ` (במקור ${quoteProduct.currency === "USD" ? "$" : quoteProduct.currency + " "}${nf.format(quoteProduct.price)}, לפי השער של היום)` : "")
     : "אין מחיר עלות (הספק לא מחובר) - יש להזין מחיר ליחידה";
   $("#qPrice").value = ""; $("#qPrice").setCustomValidity("");
   // VAT-inclusive by default; the last choice is remembered

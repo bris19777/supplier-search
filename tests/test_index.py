@@ -182,3 +182,21 @@ def test_out_of_stock_dropped_at_the_source(tmp_path, server):  # noqa: F811
         assert ix.search("samsung") == {}
         await agg.close()
     asyncio.run(go())
+
+
+def test_index_results_use_todays_rate(tmp_path, server):  # noqa: F811
+    async def go():
+        agg = make_agg(server, tmp_path)
+        agg.sites[0]["vat_included"] = False
+        ix = Index(str(tmp_path / "ix.sqlite"))
+        p = prod("a", "Lenovo ThinkPad dollar priced", url="https://a/9", price=1000.0, currency="USD",
+                 price_ex_vat=3000.0, price_inc_vat=3540.0)   # converted days ago at 3.0
+        ix.upsert([p])
+        agg._rates["USD"] = (time.time(), 3.7, "2026-10-22", "בנק ישראל")  # today's rate
+        results = await find(agg, ix, "thinkpad")
+        used = await agg.apply_rates(results)
+        item = results[0].items[0]
+        assert item.price_ex_vat == 3700.0 and item.price_inc_vat == 4366.0
+        assert used == {"USD": {"rate": 3.7, "date": "2026-10-22", "source": "בנק ישראל"}}
+        await agg.close()
+    asyncio.run(go())

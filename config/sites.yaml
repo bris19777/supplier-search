@@ -54,6 +54,7 @@ sites:
     detail:              # deep search: the spec table on the product page
       rows: "#specification-table li"
     vat_included: false
+    currency: USD        # dealer prices are in dollars; a price written with ₪ is still read as shekels
     stock_default: true
     login:
       optional: true

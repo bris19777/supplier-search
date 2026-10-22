@@ -15,6 +15,7 @@ from urllib.parse import quote_plus
 from .fetch import BrowserPool, HttpFetcher, NeedsLogin, site_proxy
 from .models import SiteResult
 from .detail import parse_detail, wants_detail
+from .normalize import with_vat
 from .parse import parse_results
 
 # The outbound proxy is the office PC (Tailscale exit node); when it is off or
@@ -45,7 +46,7 @@ class Aggregator:
         self.http = HttpFetcher(settings)
         self.browser = BrowserPool(settings)
         self._cache = {}
-        self._rates = {}  # currency -> (fetched_at, shekels per unit)
+        self._rates = {}  # currency -> (fetched_at, shekels per unit, rate date, source)
         self._details = {}  # product url -> (fetched_at, specs from its page)
 
     def site(self, site_id):
@@ -67,13 +68,34 @@ class Aggregator:
                 r.raise_for_status()
                 j = r.json()
                 value = float(j["currentExchangeRate"]) / float(j.get("unit") or 1)
-            self._rates[currency] = (time.time(), value)
+            self._rates[currency] = (time.time(), value, (j.get("lastUpdate") or "")[:10], "בנק ישראל")
             return value
         except Exception:
             if hit:
                 return hit[1]
             fallback = (self.settings.get("rates") or {}).get(currency)
+            if fallback:
+                self._rates[currency] = (time.time() - 5 * 3600, float(fallback), "", "שער קבוע מההגדרות")
             return float(fallback) if fallback else None
+
+    async def apply_rates(self, results):
+        """Shekel prices for products priced in another currency, at today's rate - also for
+        products from the index, whose conversion is days old. Returns the rates used."""
+        vat_rate = float(self.settings.get("vat_rate", 0.18))
+        used = {}
+        for res in results:
+            site = self.site(res.site) or {}
+            for p in res.items:
+                if p.currency == "ILS" or p.price is None:
+                    continue
+                rate = await self.rate(p.currency)
+                if rate is None:
+                    p.price_inc_vat = p.price_ex_vat = None  # no rate: better no price than a wrong one
+                    continue
+                p.price_inc_vat, p.price_ex_vat = with_vat(p.price * rate, site.get("vat_included", True), vat_rate)
+                _, value, date, source = self._rates[p.currency]
+                used[p.currency] = {"rate": value, "date": date, "source": source}
+        return used
 
     async def fetch(self, site, url, timeout, first_page=True):
         if site.get("fetch") == "browser":

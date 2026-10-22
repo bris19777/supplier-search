@@ -159,7 +159,9 @@ class _Session:
 
     async def _search(self, query):
         max_age = float(self.agg.settings.get("index", {}).get("max_age_days", 3))
-        return await find(self.agg, self.index, query, only=self.sites, max_age_days=max_age)
+        results = await find(self.agg, self.index, query, only=self.sites, max_age_days=max_age)
+        await self.agg.apply_rates(results)
+        return results
 
     def _search_result(self, query, in_stock_only, results):
         products = [p.to_dict() for r in results for p in r.items]

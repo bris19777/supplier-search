@@ -24,8 +24,8 @@ from urllib.parse import quote, urljoin
 from bs4 import BeautifulSoup
 
 from .models import Product
-from .normalize import (canonical_brand, detect_brand, extract_specs, parse_price,
-                        parse_stock, with_vat)
+from .normalize import (canonical_brand, detect_brand, detect_currency, extract_specs,
+                        parse_price, parse_stock, with_vat)
 
 FIELDS = ("title", "url", "image", "sku", "mpn", "brand", "category", "price", "stock")
 _ATTR_TAIL = re.compile(r"^(.*?)@([\w:-]+)$")
@@ -132,7 +132,8 @@ def parse_results(content, site, page_url, vat_rate=0.18, rates=None):
         price = parse_price(raw["price"])
         if price is not None and site.get("price_divisor"):
             price = price / site["price_divisor"]  # e.g. Shopify JSON prices in agorot
-        currency = (site.get("currency") or "ILS").upper()
+        # the price's own symbol wins over the site's default currency
+        currency = detect_currency(raw["price"]) or (site.get("currency") or "ILS").upper()
         rate = 1.0 if currency == "ILS" else (rates or {}).get(currency)
         ils = price * rate if price is not None and rate else None
         inc, ex = with_vat(ils, site.get("vat_included", True), vat_rate)
