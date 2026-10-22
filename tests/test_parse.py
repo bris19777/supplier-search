@@ -89,3 +89,11 @@ def test_image_urls_with_commas_spaces_and_srcset():
     a, b = parse_results(html, site, "https://m.test/cat/0")
     assert a.image == "https://m.test/cache/w_280,h_250,mode_pad/My%20Pic.png"
     assert b.image == "https://m.test/s.jpg"
+
+
+def test_field_value_map():
+    site = {"id": "v", "name": "V", "item": ".c",
+            "fields": {"title": "b", "stock": {"sel": ".s", "re": "^([012])$", "map": {"2": "0"}}}}
+    html = ('<div class="c"><b>A</b><i class="s">1</i></div><div class="c"><b>B</b><i class="s">0</i></div>'
+            '<div class="c"><b>C</b><i class="s">2</i></div>')
+    assert [p.in_stock for p in parse_results(html, site, "https://v/")] == [True, False, False]

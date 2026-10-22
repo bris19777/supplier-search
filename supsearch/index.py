@@ -64,6 +64,11 @@ class Index:
             self._db.execute("CREATE INDEX IF NOT EXISTS products_site ON products(site, last_seen)")
             self._db.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
                 text, tokenize="unicode61 remove_diacritics 2")""")
+            # out-of-stock products are never kept (rows from before that rule included)
+            for (i,) in self._db.execute(
+                    "SELECT id FROM products WHERE json_extract(data, '$.in_stock') = 0").fetchall():
+                self._db.execute("DELETE FROM products_fts WHERE rowid=?", (i,))
+                self._db.execute("DELETE FROM products WHERE id=?", (i,))
 
     def upsert(self, products, touch=True):
         """Store product dicts. Specs read earlier from a product page (deep search)
@@ -72,6 +77,9 @@ class Index:
         seen_at = time.time()
         with self._lock, self._db:
             for p in products:
+                if p.get("in_stock") is False:
+                    self._delete_key(_key(p))  # went out of stock: forget it
+                    continue
                 key = _key(p)
                 row = self._db.execute("SELECT id, data FROM products WHERE key=?", (key,)).fetchone()
                 if row:
@@ -88,8 +96,14 @@ class Index:
                     rowid = cur.lastrowid
                 self._db.execute("INSERT INTO products_fts(rowid, text) VALUES (?,?)", (rowid, _fts_text(p)))
 
+    def _delete_key(self, key):
+        row = self._db.execute("SELECT id FROM products WHERE key=?", (key,)).fetchone()
+        if row:
+            self._db.execute("DELETE FROM products_fts WHERE rowid=?", (row[0],))
+            self._db.execute("DELETE FROM products WHERE id=?", (row[0],))
+
     def upsert_results(self, results, touch=True):
-        self.upsert([p.to_dict() for r in results if r.ok for p in r.items], touch)
+        self.upsert([p.to_dict() for r in results if r.ok for p in r.items + r.out_of_stock], touch)
 
     def search(self, query, sites=None, max_age_days=None, limit=3000):
         """{site_id: [(product dict, last_seen)]} for products matching every query word."""

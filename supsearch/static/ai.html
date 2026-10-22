@@ -73,7 +73,7 @@
         <button type="button">מסך 27 אינץ' QHD לעבודה, עם USB-C</button>
       </div>
       <div class="row">
-        <label><input type="checkbox" id="stock" checked> רק מוצרים במלאי</label>
+        <label title="מוצרים שאזלו לא מוצגים אף פעם. הסימון מסתיר גם מוצרים שהספק לא מציג להם מלאי"><input type="checkbox" id="stock"> רק מלאי מאושר</label>
         <span class="grow hint">ה-AI מחפש אצל כל הספקים, משווה ומציע את המתאים ביותר. זה לוקח בדרך כלל עד דקה-שתיים.</span>
         <button id="go">חפש</button>
       </div>
@@ -93,7 +93,6 @@ document.querySelectorAll(".examples button").forEach(b => b.onclick = () => { $
 
 function stock(p) {
   if (p.in_stock === true) return `<span class="tag in">במלאי</span>`;
-  if (p.in_stock === false) return `<span class="tag out">לא במלאי</span>`;
   return `<span class="tag unk">מלאי לא ידוע</span>`;
 }
 function specs(p) {

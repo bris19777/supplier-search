@@ -114,7 +114,10 @@ class Aggregator:
                     if not found:
                         break  # past the last page
                     seen.update(p.url or p.title for p in found)
-                    res.items.extend(found)
+                    # Out-of-stock products are ignored everywhere: not in results, the index,
+                    # deep search or AI search. They're only noted, to drop them from the index.
+                    res.items.extend(p for p in found if p.in_stock is not False)
+                    res.out_of_stock.extend(p for p in found if p.in_stock is False)
                     if site.get("page_size") and len(found) < int(site["page_size"]):
                         break  # a short page is the last one
             await asyncio.wait_for(run(), timeout=timeout * max(1, len(page_urls(site, query, pages))))

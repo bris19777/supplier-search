@@ -116,7 +116,9 @@ def test_search_both_sites_with_login(client):
     assert r.status_code == 200, r.text
     j = r.json()
     status = {s["site"]: s for s in j["sites"]}
-    assert status["a"]["ok"] and status["a"]["count"] == 2, status
+    # shop A's Samsung SSD is marked "אזל": dropped at the source, counted only
+    assert status["a"]["ok"] and status["a"]["count"] == 1 and status["a"]["out_of_stock"] == 1, status
+    assert all("Samsung" not in p["title"] for p in j["items"])
     assert status["b"]["ok"] and status["b"]["count"] == 1, status
     titles = [p["title"] for p in j["items"]]
     assert titles[0] == "Kingston SSD 1TB NV3 NVMe"   # 249 inc VAT

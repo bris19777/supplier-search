@@ -377,7 +377,7 @@ def create_app(sites_path=None, credentials_path=None):
 
     class AIRequest(BaseModel):
         query: str
-        in_stock_only: bool = True
+        in_stock_only: bool = False  # out-of-stock never appear; this also drops unknown stock
         sites: list[str] = Field(default_factory=list)
 
     class AIKey(BaseModel):

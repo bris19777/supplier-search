@@ -149,3 +149,36 @@ def test_index_api(tmp_path, monkeypatch, server):  # noqa: F811
         assert j["sites"][0]["from_index"] and j["items"][0]["title"] == "Samsung SSD 2TB 990 Pro"
         j = c.post("/api/search", json={"query": "samsung", "source": "live"}).json()
         assert not j["sites"][0]["from_index"] and j["total"] == 1
+
+
+def test_out_of_stock_never_kept(tmp_path):
+    path = str(tmp_path / "ix.sqlite")
+    ix = Index(path)
+    p = prod("a", "Kingston SSD 1TB NV3", url="https://a/1", in_stock=True)
+    ix.upsert([p])
+    assert ix.search("kingston")
+    ix.upsert([{**p, "in_stock": False}])                 # it ran out: gone from the index
+    assert ix.search("kingston") == {} and ix.stats() == {}
+    ix.upsert([prod("a", "Samsung SSD", url="https://a/2", in_stock=False)])
+    assert ix.stats() == {}                               # never added in the first place
+    # rows written before this rule existed are cleaned when the index opens
+    ix._db.execute("INSERT INTO products(key, site, data, last_seen) VALUES ('a|x', 'a', ?, ?)",
+                   ('{"title": "old", "in_stock": false}', time.time()))
+    ix._db.commit()
+    ix.close()
+    assert Index(path).stats() == {}
+
+
+def test_out_of_stock_dropped_at_the_source(tmp_path, server):  # noqa: F811
+    async def go():
+        agg = make_agg(server, tmp_path)
+        agg.sites[0]["fields"]["stock"] = ".st"         # the mock shop marks Samsung "אזל"
+        ix = Index(str(tmp_path / "ix.sqlite"))
+        crawler = Crawler(agg, ix, {"queries": ["ssd"], "pause_seconds": 0})
+        await crawler.run()
+        assert titles(ix.search("ssd")) == ["Kingston SSD 1TB NV3 NVMe"]
+        [res] = await find(agg, ix, "samsung", source="live")
+        assert res.items == [] and len(res.out_of_stock) == 1
+        assert ix.search("samsung") == {}
+        await agg.close()
+    asyncio.run(go())

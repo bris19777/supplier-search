@@ -10,6 +10,7 @@ Field specs, for format: html
   "."                   text of the item element itself
   [spec, spec, ...]     first spec that yields a non-empty value
   {sel: spec, re: "..."}  then keep regex group 1 (or the whole match)
+  {sel: spec, map: {a: b}}  then replace a value found in the map
   {const: "value"}      a fixed value
 
 For format: json, "item" and the field specs are dot paths into the JSON
@@ -88,6 +89,8 @@ def field_value(item, spec, getter):
             if not m:
                 return ""
             v = _clean(m.group(1) if m.groups() else m.group(0))
+        if spec.get("map") and str(v) in spec["map"]:
+            v = spec["map"][str(v)]
         return v
     return getter(item, spec)
 

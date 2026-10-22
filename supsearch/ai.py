@@ -27,8 +27,9 @@ SYSTEM = """You help the buyer of an Israeli computer shop and lab find products
 (Techno-Rezef, Visual, Amtel, Mor Levi, C-Data and others). The buyer writes in Hebrew or English: a \
 product description, a model name, a manufacturer part number, or a customer's requirement.
 
-Find the product they asked for, or the closest products the distributors actually have, preferring \
-items in stock. Use search_suppliers as many times as useful: the suppliers' own search is keyword \
+Find the product they asked for, or the closest products the distributors actually have in stock. \
+Out-of-stock products are never returned by the tools; in_stock null means the supplier doesn't show \
+stock (typically before logging in), so such an item may still be available. Use search_suppliers as many times as useful: the suppliers' own search is keyword \
 based, so search short and specific (a part number, a model family like "ThinkPad L16", a key spec \
 like "RTX 4060") and try variations rather than pasting the whole request. When a candidate's title \
 doesn't show the specs that matter for the decision, use product_details.
@@ -47,8 +48,9 @@ TOOLS = [
         "description": (
             "Search all the distributors' websites at once with their own keyword search, and return "
             "the merged products: id, supplier, title, manufacturer part number, brand, price in ILS "
-            "(before and including VAT, null when hidden), stock (true/false/null when unknown) and the "
-            "specs read from the title. Results are relevance-sorted, at most 30."),
+            "(before and including VAT, null when hidden), stock (true, or null when the supplier doesn't "
+            "show it; out-of-stock products are never listed) and the specs read from the title. "
+            "Results are relevance-sorted, at most 30."),
         "strict": True,
         "input_schema": {
             "type": "object",
@@ -56,7 +58,8 @@ TOOLS = [
                 "query": {"type": "string",
                           "description": "Short keyword query, e.g. a part number or 'lenovo i5 16GB'"},
                 "in_stock_only": {"type": "boolean",
-                                  "description": "Drop products the supplier marks out of stock"},
+                                  "description": "Only products whose stock the supplier confirms "
+                                                 "(drops those with unknown stock)"},
             },
             "required": ["query", "in_stock_only"],
             "additionalProperties": False,
@@ -215,11 +218,11 @@ class _Session:
         return out
 
 
-async def ai_search(agg, api_key, request_text, in_stock_only=True, sites=None, index=None):
+async def ai_search(agg, api_key, request_text, in_stock_only=False, sites=None, index=None):
     """Run the search conversation. Returns the answer with full product dicts."""
     session = _Session(agg, sites, index)
     client = make_client(api_key)
-    hint = "" if in_stock_only else "\n\n(Include out-of-stock products too.)"
+    hint = "\n\n(Only products whose stock is confirmed.)" if in_stock_only else ""
     messages = [{"role": "user", "content": request_text.strip() + hint}]
     usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     response = None

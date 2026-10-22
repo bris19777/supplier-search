@@ -84,7 +84,7 @@ sites:
       mpn: "p.code"
       brand: {sel: ".brand_json", re: '"title":"\s*([^"]+?)\s*"'}
       price: "p.price"
-      stock: {sel: ".stock_show", re: '^([01])$'}   # 1 in stock, 0 out, 2 on the way (unknown)
+      stock: {sel: ".stock_show", re: '^([012])$', map: {"2": "0"}}   # 1 in stock, 0 out, 2 on the way = not in stock
     detail:              # deep search: titles carry only the model; the description has the specs
       text: "#item_details"
     currency: USD        # the store is set to USD; verify once logged in
@@ -205,8 +205,9 @@ sites:
     enabled: true
     home: https://www.usys.co.il/
     fetch: browser       # guests can browse, but prices need the dealer login
-    search_url: "https://www.usys.co.il/?s={query}&post_type=product&dgwt_wcas=1"
-    page_url: "https://www.usys.co.il/page/{page}/?s={query}&post_type=product&dgwt_wcas=1"
+    # filter_stock_status: the site leaves out-of-stock products out of the results itself
+    search_url: "https://www.usys.co.il/?s={query}&post_type=product&dgwt_wcas=1&filter_stock_status=instock"
+    page_url: "https://www.usys.co.il/page/{page}/?s={query}&post_type=product&dgwt_wcas=1&filter_stock_status=instock"
     pages: 3
     page_size: 12
     item: "div.product-small.product"

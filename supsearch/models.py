@@ -40,6 +40,7 @@ class SiteResult:
     cached: bool = False
     from_index: bool = False  # answered from the local index, not the site
     index_age: float = 0.0    # seconds since the oldest of these products was last seen
+    out_of_stock: list = field(default_factory=list)  # dropped: marked out of stock by the site
     deep_read: int = 0       # product pages opened by deep search
     deep_filled: int = 0     # products that gained specs from them
 
@@ -49,5 +50,6 @@ class SiteResult:
             "count": len(self.items), "error": self.error,
             "needs_login": self.needs_login, "elapsed": round(self.elapsed, 2),
             "cached": self.cached, "from_index": self.from_index,
-            "index_age": round(self.index_age), "deep_read": self.deep_read, "deep_filled": self.deep_filled,
+            "index_age": round(self.index_age), "out_of_stock": len(self.out_of_stock),
+            "deep_read": self.deep_read, "deep_filled": self.deep_filled,
         }

@@ -92,8 +92,10 @@ def test_ai_search_loop_and_answer(tmp_path, monkeypatch, server):  # noqa: F811
     assert [x["tool_use_id"] for x in results] == ["t1", "t2"]
     found = json.loads(results[0]["content"])["products"]
     assert found[0]["id"] == "p1" and found[0]["supplier"] == "חנות א"
-    assert all(p["in_stock"] is True for p in found)        # in_stock_only respected
-    assert any(p["in_stock"] is False for p in json.loads(results[1]["content"])["products"])
+    assert all(p["in_stock"] is True for p in found)
+    # out-of-stock products never reach Claude, even when it doesn't ask for stock only
+    assert all(p["in_stock"] is not False for p in json.loads(results[1]["content"])["products"])
+    assert "Samsung SSD 2TB 990 Pro" not in results[1]["content"]
 
     assert j["understanding"] == "SSD של Kingston בנפח 1TB"
     assert [m["match"] for m in j["matches"]] == ["exact"]   # unknown id p99 dropped
