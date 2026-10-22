@@ -170,9 +170,9 @@
     <div class="grid3">
       <label>כמות <input id="qQty" type="number" min="1" step="1" value="1"></label>
       <label>תוספת % <input id="qMarkup" type="number" min="0" step="0.5"></label>
-      <label><span id="qPriceLabel">מחיר ליחידה (לפני מע"מ)</span> <input id="qPrice" type="number" min="0" step="0.01" required></label>
+      <label><span id="qPriceLabel">מחיר ליחידה (כולל מע"מ)</span> <input id="qPrice" type="number" min="0" step="0.01" required></label>
     </div>
-    <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qInc"> המחיר שאני רושם כולל מע"מ</label>
+    <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qInc" checked> המחיר שאני רושם כולל מע"מ</label>
     <div class="cost" id="qCost"></div>
     <label>הערות <textarea id="qNotes" rows="2" maxlength="1000" placeholder="למשל: כולל התקנה, אחריות 3 שנים"></textarea></label>
     <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qImage" checked> להציג תמונת מוצר</label>
@@ -531,11 +531,18 @@ function priceFromMarkup() {
   }
   quoteTotals();
 }
+function priceLabel() {
+  $("#qPriceLabel").textContent = $("#qInc").checked ? 'מחיר ליחידה (כולל מע"מ)' : 'מחיר ליחידה (לפני מע"מ)';
+}
+// the browser's own "Please fill out this field" in Hebrew
+$("#qPrice").addEventListener("invalid", e => e.target.setCustomValidity("יש לרשום מחיר ליחידה"));
+$("#qPrice").addEventListener("input", e => e.target.setCustomValidity(""));
 $("#qInc").addEventListener("change", () => {
+  try { localStorage.setItem("supsearch.quoteInc", $("#qInc").checked ? "1" : "0"); } catch (e) {}
   // switching the meaning of the price field converts the number in it, the total stays
   const v = Number($("#qPrice").value);
   if (v) $("#qPrice").value = r2($("#qInc").checked ? v * (1 + VAT) : v / (1 + VAT));
-  $("#qPriceLabel").textContent = $("#qInc").checked ? 'מחיר ליחידה (כולל מע"מ)' : 'מחיר ליחידה (לפני מע"מ)';
+  priceLabel();
   quoteTotals();
 });
 let specSource = "";
@@ -575,7 +582,11 @@ $("#results").addEventListener("click", async e => {
   $("#qCost").textContent = quoteProduct.price_ex_vat != null
     ? `עלות אצל ${quoteProduct.site_name}: ${money(quoteProduct.price_ex_vat)} לפני מע"מ`
     : "אין מחיר עלות (הספק לא מחובר) - יש להזין מחיר ליחידה";
-  $("#qPrice").value = "";
+  $("#qPrice").value = ""; $("#qPrice").setCustomValidity("");
+  // VAT-inclusive by default; the last choice is remembered
+  let inc = true;
+  try { inc = localStorage.getItem("supsearch.quoteInc") !== "0"; } catch (e) {}
+  $("#qInc").checked = inc; priceLabel();
   $("#qSpecs").value = ""; $("#qSpecsWrap").hidden = true; $("#qSpecsMsg").textContent = ""; specSource = "";
   priceFromMarkup();
   $("#quoteDlg").showModal();
