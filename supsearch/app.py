@@ -22,7 +22,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import config, filters
+from . import ai, config, filters
 from .aggregator import Aggregator, page_urls
 from .config import load_credentials, load_sites
 from .parse import parse_results
@@ -105,6 +105,13 @@ def create_app(sites_path=None, credentials_path=None):
     app = FastAPI(title="חיפוש ספקים", lifespan=lifespan)
     app.get("/")(page("index.html"))
     app.get("/admin")(page("admin.html", admin=True))
+    app.get("/ai")(page("ai.html"))
+
+    AI_KEY = "anthropic_api_key"
+
+    def ai_key():
+        """The admin-saved key, else ANTHROPIC_API_KEY from the environment."""
+        return state["store"].get_secret(AI_KEY) or os.environ.get("ANTHROPIC_API_KEY") or None
 
     @app.get("/healthz")
     async def healthz():
@@ -284,7 +291,59 @@ def create_app(sites_path=None, credentials_path=None):
     async def info(user=Depends(require_user)):
         # set by start.sh: "office:<exit node>" or "direct:tailscale-failed"; unset = direct
         kind, _, detail = os.environ.get("EGRESS", "").partition(":")
-        return {"egress": kind or "direct", "egress_detail": detail}
+        return {"egress": kind or "direct", "egress_detail": detail, "ai": ai_key() is not None}
+
+    # -- AI search ---------------------------------------------------------------
+
+    class AIRequest(BaseModel):
+        query: str
+        in_stock_only: bool = True
+        sites: list[str] = Field(default_factory=list)
+
+    class AIKey(BaseModel):
+        key: str
+
+    @app.post("/api/ai/search")
+    async def ai_search(req: AIRequest, user=Depends(require_user)):
+        if not req.query.strip():
+            raise HTTPException(400, "יש לכתוב מה מחפשים")
+        if len(req.query) > 4000:
+            raise HTTPException(400, "הבקשה ארוכה מדי")
+        key = ai_key()
+        if not key:
+            raise HTTPException(400, "חיפוש AI לא הוגדר - מנהל צריך לשמור מפתח API בעמוד הניהול")
+        try:
+            return await ai.ai_search(state["agg"], key, req.query, req.in_stock_only,
+                                      set(req.sites) or None)
+        except ai.AIError as e:
+            raise HTTPException(502, str(e))
+
+    @app.get("/api/admin/ai-key")
+    async def ai_key_status(admin=Depends(require_admin)):
+        return {"saved": state["store"].secret_status(AI_KEY),
+                "from_env": bool(os.environ.get("ANTHROPIC_API_KEY")), "model": ai.MODEL}
+
+    @app.put("/api/admin/ai-key")
+    async def save_ai_key(req: AIKey, admin=Depends(require_admin)):
+        try:
+            state["store"].set_secret(AI_KEY, req.key, by=admin["username"] or "admin")
+        except StoreError as e:
+            raise HTTPException(400, str(e))
+        ok, message = await ai.check_key(req.key.strip())
+        return {"ok": ok, "message": "נשמר. " + message}
+
+    @app.delete("/api/admin/ai-key")
+    async def delete_ai_key(admin=Depends(require_admin)):
+        state["store"].delete_secret(AI_KEY)
+        return {"ok": True}
+
+    @app.post("/api/admin/ai-key/test")
+    async def test_ai_key(admin=Depends(require_admin)):
+        key = ai_key()
+        if not key:
+            raise HTTPException(400, "לא נשמר מפתח")
+        ok, message = await ai.check_key(key)
+        return {"ok": ok, "message": message}
 
     @app.get("/api/sites")
     async def sites(user=Depends(require_user)):

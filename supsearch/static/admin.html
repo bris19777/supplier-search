@@ -61,6 +61,22 @@
   </div>
 
   <section>
+    <h2>חיפוש AI: מפתח API של Anthropic</h2>
+    <p class="hint">חיפוש ה-AI משתמש במפתח ה-API שלך. את המפתח יוצרים ב-
+      <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com → API Keys</a>.
+      המפתח נשמר מוצפן, משמש את כל המשתמשים, ואי אפשר לצפות בו אחרי השמירה. כל חיפוש AI עולה כמה
+      סנטים, והעלות מוצגת אחרי כל חיפוש.</p>
+    <div class="row" id="aiRow">
+      <span id="aiStatus" class="tag">טוען…</span>
+      <input id="aiKey" type="password" dir="ltr" placeholder="sk-ant-api03-…" autocomplete="off">
+      <button class="primary" id="aiSave">שמירה</button>
+      <button id="aiTest">בדיקת מפתח</button>
+      <button class="danger" id="aiDel">מחיקה</button>
+    </div>
+    <div class="msg" id="aiMsg"></div>
+  </section>
+
+  <section>
     <h2>סיסמאות לאתרי הספקים</h2>
     <p class="hint">משותפות לכל המשתמשים. הסיסמאות נשמרות מוצפנות בשרת, ואף משתמש לא יכול לראות אותן,
       גם לא מנהל. הן משמשות רק את השרת להתחברות לספקים. כדי לשנות שם משתמש בלבד, השאר את שדה
@@ -208,7 +224,34 @@ $("#newUser").addEventListener("submit", async (e) => {
   } catch (ex) { say($("#nuMsg"), ex.message, false); }
 });
 
-loadMe().then(() => Promise.all([loadSuppliers(), loadUsers()])).catch(() => {});
+async function loadAiKey() {
+  const j = await api("api/admin/ai-key");
+  const st = $("#aiStatus");
+  if (j.saved && !j.saved.ok) { st.textContent = "יש להזין מחדש"; st.className = "tag bad"; }
+  else if (j.saved) { st.textContent = `נשמר (…${j.saved.hint})`; st.className = "tag ok"; st.title = `${j.saved.updated_by} · ${j.saved.updated_at}`; }
+  else if (j.from_env) { st.textContent = "מוגדר בשרת"; st.className = "tag ok"; }
+  else { st.textContent = "לא הוגדר"; st.className = "tag"; }
+  $("#aiDel").hidden = !j.saved;
+  $("#aiTest").hidden = !(j.saved || j.from_env);
+}
+$("#aiSave").onclick = async () => {
+  try {
+    const j = await api("api/admin/ai-key", { method: "PUT", body: JSON.stringify({ key: $("#aiKey").value }) });
+    $("#aiKey").value = ""; say($("#aiMsg"), j.message, j.ok); loadAiKey();
+  } catch (e) { say($("#aiMsg"), e.message, false); }
+};
+$("#aiTest").onclick = async () => {
+  say($("#aiMsg"), "בודק…", true);
+  try { const j = await api("api/admin/ai-key/test", { method: "POST" }); say($("#aiMsg"), j.message, j.ok); }
+  catch (e) { say($("#aiMsg"), e.message, false); }
+};
+$("#aiDel").onclick = async () => {
+  if (!confirm("למחוק את מפתח ה-API? חיפוש ה-AI יפסיק לעבוד.")) return;
+  try { await api("api/admin/ai-key", { method: "DELETE" }); say($("#aiMsg"), "נמחק", true); loadAiKey(); }
+  catch (e) { say($("#aiMsg"), e.message, false); }
+};
+
+loadMe().then(() => Promise.all([loadAiKey(), loadSuppliers(), loadUsers()])).catch(() => {});
 </script>
 </body>
 </html>

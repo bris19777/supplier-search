@@ -376,6 +376,11 @@ $("#form").addEventListener("submit", e => {
 async function loadInfo() {
   try {
     const j = await api("api/info");
+    if (j.ai) {
+      const a = document.createElement("a");
+      a.href = "ai"; a.textContent = "חיפוש AI"; a.title = "תיאור או קוד מוצר - ה-AI ימצא את הדומה ביותר במלאי";
+      $("#userbar").prepend(a);
+    }
     const el = $("#egress");
     if (j.egress === "office") {
       el.textContent = "יוצא דרך המשרד"; el.className = "chip ok"; el.title = "Tailscale exit node: " + j.egress_detail;
@@ -388,8 +393,7 @@ async function loadInfo() {
 }
 
 loadPrefs();
-loadMe().catch(() => {});
-loadInfo();
+loadMe().catch(() => {}).then(loadInfo);  // the AI link goes into the user bar loadMe draws
 segment("#basis", "basis");
 segment("#view", "view");
 loadSites().then(() => {

@@ -247,6 +247,42 @@ class Store:
                 self._write("suppliers.json", data)
 
 
+    # -- app secrets (the Anthropic API key for AI search) ------------------------
+
+    def set_secret(self, name, value, by):
+        if not (value or "").strip():
+            raise StoreError("יש להזין ערך")
+        with self._lock:
+            data = self._read("secrets.json")
+            data[name] = {"value": self._fernet.encrypt(value.strip().encode()).decode(),
+                          "hint": value.strip()[-4:], "updated_by": by,
+                          "updated_at": time.strftime("%Y-%m-%d %H:%M")}
+            self._write("secrets.json", data)
+
+    def get_secret(self, name):
+        v = self._read("secrets.json").get(name)
+        if not v:
+            return None
+        try:
+            return self._fernet.decrypt(v["value"].encode()).decode()
+        except InvalidToken:
+            return None
+
+    def secret_status(self, name):
+        """{hint (last 4 chars), updated_by, updated_at, ok} or None; never the value."""
+        v = self._read("secrets.json").get(name)
+        if not v:
+            return None
+        return {"hint": v.get("hint", ""), "updated_by": v.get("updated_by"),
+                "updated_at": v.get("updated_at"), "ok": self.get_secret(name) is not None}
+
+    def delete_secret(self, name):
+        with self._lock:
+            data = self._read("secrets.json")
+            if data.pop(name, None) is not None:
+                self._write("secrets.json", data)
+
+
 class Credentials:
     """What the aggregator asks for a site's login: the admin-saved one, else the
     credentials.yaml / SUPPLIER_CREDENTIALS fallback."""

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>חיפוש AI · חיפוש ספקים</title>
+<style>
+  :root {
+    --bg: #f4f6f9; --panel: #fff; --ink: #1d2433; --muted: #667085; --line: #e3e7ee;
+    --accent: #1f5eff; --accent-soft: #e8efff; --ok: #12805c; --ok-soft: #e3f6ee;
+    --bad: #b42318; --bad-soft: #fdecea; --warn: #9a6700; --warn-soft: #fff4d6;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 16px; }
+  .bar { display: flex; gap: 12px; align-items: center; max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0; flex: 1; }
+  a { color: var(--accent); text-decoration: none; }
+  main { max-width: 1000px; margin: 16px auto; padding: 0 16px; display: grid; gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  textarea { width: 100%; min-height: 90px; font: inherit; font-size: 15px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .row .grow { flex: 1; }
+  button { font: inherit; padding: 9px 18px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  .hint { color: var(--muted); font-size: 13px; }
+  .examples button { background: var(--accent-soft); color: var(--accent); border-color: transparent; padding: 4px 10px; font-size: 13px; margin: 4px 0 0 6px; }
+  .understanding { font-size: 15px; }
+  .note { background: var(--warn-soft); border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+  .match { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); align-items: start; }
+  .match:first-child { border-top: 0; }
+  .match img, .ph { width: 64px; height: 64px; object-fit: contain; border-radius: 6px; background: #fafbfc; }
+  .title { font-weight: 600; color: var(--ink); }
+  .title:hover { color: var(--accent); }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .reason { margin-top: 6px; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--accent-soft); color: var(--accent); }
+  .tag.exact { background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+  .tag.close { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .tag.alternative { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
+  .tag.in { background: var(--ok-soft); color: var(--ok); }
+  .tag.out { background: var(--bad-soft); color: var(--bad); }
+  .tag.unk { background: #f0f2f5; color: var(--muted); }
+  .price { text-align: left; white-space: nowrap; }
+  .price b { font-size: 18px; }
+  .price small { display: block; color: var(--muted); font-size: 12px; }
+  .err { color: var(--bad); }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 700px) {
+    .match { grid-template-columns: 48px 1fr; }
+    .match img, .ph { width: 48px; height: 48px; }
+    .match .price { grid-column: 2; text-align: right; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>חיפוש AI</h1>
+    <a href="./">חזרה לחיפוש הרגיל</a>
+  </div>
+</header>
+<main>
+  <section class="card">
+    <form id="f">
+      <textarea id="q" placeholder="תאר מה מחפשים, או הדבק קוד מוצר. למשל: מחשב נייד 15.6 עם i5, 16GB ו-SSD 512, עד 3,000 ש&quot;ח"></textarea>
+      <div class="examples hint">דוגמאות:
+        <button type="button">21X8002RIV</button>
+        <button type="button">מחשב נייד לעבודה משרדית, מעבד i5 או Ultra 5, 16GB, מסך 14</button>
+        <button type="button">מסך 27 אינץ' QHD לעבודה, עם USB-C</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="stock" checked> רק מוצרים במלאי</label>
+        <span class="grow hint">ה-AI מחפש אצל כל הספקים, משווה ומציע את המתאים ביותר. זה לוקח בדרך כלל עד דקה-שתיים.</span>
+        <button id="go">חפש</button>
+      </div>
+    </form>
+  </section>
+  <section class="card" id="out" hidden></section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const nf = new Intl.NumberFormat("he-IL", { maximumFractionDigits: 2 });
+const MATCH = { exact: "זהה", close: "קרוב", alternative: "חלופה" };
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function safeUrl(u) { return /^https?:\/\//i.test(u || "") ? u : "#"; }
+function money(v) { return v == null ? "—" : "₪" + nf.format(v); }
+
+document.querySelectorAll(".examples button").forEach(b => b.onclick = () => { $("#q").value = b.textContent; $("#q").focus(); });
+
+function stock(p) {
+  if (p.in_stock === true) return `<span class="tag in">במלאי</span>`;
+  if (p.in_stock === false) return `<span class="tag out">לא במלאי</span>`;
+  return `<span class="tag unk">מלאי לא ידוע</span>`;
+}
+function specs(p) {
+  return Object.values(p.specs || {}).map(v => `<span>${esc(v)}</span>`).join("");
+}
+
+$("#f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const query = $("#q").value.trim(); if (!query) return;
+  const out = $("#out");
+  out.hidden = false;
+  out.innerHTML = `<span class="spinner"></span> ה-AI מחפש אצל הספקים ומשווה…`;
+  $("#go").disabled = true;
+  try {
+    const r = await fetch("api/ai/search", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, in_stock_only: $("#stock").checked }) });
+    if (r.status === 401) { location.href = "login"; return; }
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    out.innerHTML = `<div class="understanding">${esc(j.understanding)}</div>`
+      + (j.note ? `<div class="note">${esc(j.note)}</div>` : "")
+      + (j.matches.length ? j.matches.map(p => `<div class="match">
+          ${p.image ? `<img src="${esc(safeUrl(p.image))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<div class="ph"></div>`}
+          <div>
+            <a class="title" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">${esc(p.title)}</a>
+            <div class="meta"><span class="tag ${esc(p.match)}">${esc(MATCH[p.match] || p.match)}</span>
+              <span class="tag">${esc(p.site_name)}</span>${stock(p)}
+              ${p.mpn ? `<span>מק"ט יצרן: ${esc(p.mpn)}</span>` : ""}${specs(p)}</div>
+            <div class="reason">${esc(p.reason)}</div>
+          </div>
+          <div class="price"><b>${money(p.price_inc_vat)}</b>${p.price_ex_vat != null ? `<small>לפני מע"מ: ${money(p.price_ex_vat)}</small>` : ""}</div>
+        </div>`).join("") : `<p>לא נמצאו מוצרים מתאימים.</p>`)
+      + `<div class="foot">חיפושים שה-AI הריץ: ${j.searches.map(esc).join(" · ") || "—"}
+         · עלות משוערת: $${j.usage.cost_usd.toFixed(3)}</div>`;
+  } catch (ex) {
+    out.innerHTML = `<div class="err">${esc(ex.message)}</div>`;
+  } finally {
+    $("#go").disabled = false;
+  }
+});
+</script>
+</body>
+</html>

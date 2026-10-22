@@ -156,6 +156,8 @@ def test_credentials_from_env(monkeypatch, tmp_path):
 
 
 def test_info_reports_egress(monkeypatch, client):
-    assert client.get("/api/info").json() == {"egress": "direct", "egress_detail": ""}
+    info = client.get("/api/info").json()
+    assert (info["egress"], info["egress_detail"]) == ("direct", "")
     monkeypatch.setenv("EGRESS", "office:office-pc")
-    assert client.get("/api/info").json() == {"egress": "office", "egress_detail": "office-pc"}
+    info = client.get("/api/info").json()
+    assert (info["egress"], info["egress_detail"]) == ("office", "office-pc")
