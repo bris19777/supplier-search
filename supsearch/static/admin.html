@@ -174,7 +174,7 @@ async function loadSuppliers() {
     if (!s.auto_login) status += ` <span class="tag warn" title="לאתר עדיין לא הוגדר טופס התחברות אוטומטי">ללא התחברות אוטומטית</span>`;
     return `<tr data-site="${esc(s.id)}">
       <td><b>${esc(s.name)}</b>${s.enabled ? "" : ` <span class="tag">טרם הוגדר לחיפוש</span>`}</td>
-      <td><input class="su" value="${esc(s.saved ? s.saved.username : "")}" placeholder="שם משתמש / מייל" autocomplete="off"></td>
+      <td><input class="su" dir="auto" value="${esc(s.saved ? s.saved.username : "")}" placeholder="שם משתמש / מייל" autocomplete="off"></td>
       <td><input class="sp" type="password" placeholder="${s.saved ? "••••••• (ללא שינוי)" : "סיסמה"}" autocomplete="new-password"></td>
       <td>${status}</td>
       <td><div class="actions">

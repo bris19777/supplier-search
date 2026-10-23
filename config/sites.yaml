@@ -95,8 +95,9 @@ sites:
       url: https://www.visualdg.co.il/customer_login
       username: "#customer_session_username"
       password: "#customer_session_password"
-      submit: '#new_customer_session [type="submit"]'
-      logged_in: 'a[href*="customer_logout"]:visible'   # unverified
+      # Konimbo: the form has no submit button, so Enter does nothing; this link submits it
+      submit: "#new_customer_session .smallButton a"
+      logged_in: "body.logged_in"   # Konimbo marks the page body once a customer is logged in
     notes: >-
       Konimbo. Prices for club (dealer) customers only. Search also matches
       descriptions, so generic words are noisy. 12 items per page.
@@ -125,8 +126,9 @@ sites:
       url: https://www.amtel.co.il/customer_login
       username: "#customer_session_username"
       password: "#customer_session_password"
-      submit: '#new_customer_session [type="submit"]'
-      logged_in: 'a[href*="customer_logout"]:visible'   # unverified
+      # Konimbo: the form has no submit button, so Enter does nothing; this link submits it
+      submit: "#new_customer_session .smallButton a"
+      logged_in: "body.logged_in"   # Konimbo marks the page body once a customer is logged in
     notes: >-
       Konimbo. Prices and stock for dealers only. 40 items per page.
 
