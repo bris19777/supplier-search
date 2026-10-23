@@ -238,7 +238,12 @@ sites:
       captcha:           # the form asks a sum ("8 + 2"); answered automatically
         question: "#ncw_captcha_question_login"
         answer: "#ncw_numeric_captcha_login"
+      remember: "#rememberme"
       logged_in: "body.logged-in"                                     # unverified
+      # Wordfence: when its reCAPTCHA scores the login as automated it emails a verification
+      # link instead of logging in; the admin page takes that link (see fetch.verify_link)
+      error: ".woocommerce-error"
+      verify_re: "verification required|additional verification"
     # titles are English and search matches titles only
     index_queries: [lenovo, hp, dell, asus, acer, msi, gigabyte, samsung, lg, intel, kingston,
                     western digital, lexar, verbatim, pny, d-link, laptop, desktop, monitor, ssd,

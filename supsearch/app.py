@@ -419,6 +419,7 @@ def create_app(sites_path=None, credentials_path=None):
             "auto_login": bool((s.get("login") or {}).get("username")),
             "saved": saved.get(s["id"]),
             "from_config": s["id"] in agg.credentials.static,
+            "needs_verification": agg.browser.needs_verification(s["id"]),
         } for s in agg.sites]
 
     @app.put("/api/admin/suppliers/{site_id}")
@@ -453,7 +454,28 @@ def create_app(sites_path=None, credentials_path=None):
         timeout = int(site.get("timeout") or agg.settings.get("timeout", 30))
         await agg.forget(site_id)
         ok, message = await agg.browser.check_login(site, creds, page_urls(site, "test")[0], timeout)
-        return {"ok": ok, "message": message}
+        return {"ok": ok, "message": message, "verify": agg.browser.needs_verification(site_id)}
+
+    class VerifyLink(BaseModel):
+        link: str
+
+    @app.post("/api/admin/suppliers/{site_id}/verify")
+    async def verify_supplier(site_id: str, req: VerifyLink, admin=Depends(require_admin)):
+        """Finish a login the site confirmed by email: open the emailed link and log in."""
+        site = known_site(site_id)
+        agg = state["agg"]
+        creds = agg.credentials.get(site_id)
+        if not creds or not (site.get("login") or {}).get("username"):
+            raise HTTPException(400, "לא נשמרו פרטי כניסה לאתר הזה")
+        link, home = urlsplit(req.link.strip()), urlsplit(site.get("home") or site["search_url"])
+        host = lambda u: (u.hostname or "").removeprefix("www.")
+        if link.scheme not in ("http", "https") or not host(link) or host(link) != host(home):
+            raise HTTPException(400, f"זה לא קישור של {site['name']} - העתק את הקישור מהמייל שהאתר שלח")
+        timeout = int(site.get("timeout") or agg.settings.get("timeout", 30))
+        await agg.forget(site_id)
+        ok, message = await agg.browser.verify_link(site, creds, req.link.strip(),
+                                                    page_urls(site, "test")[0], timeout)
+        return {"ok": ok, "message": message, "verify": agg.browser.needs_verification(site_id)}
 
     class SearchRequest(BaseModel):
         query: str

@@ -171,6 +171,7 @@ async function loadSuppliers() {
     else if (s.saved) status = `<span class="tag ok" title="${esc(s.saved.updated_by)} · ${esc(s.saved.updated_at)}">נשמר</span>`;
     else if (s.from_config) status = `<span class="tag">מקובץ ההגדרות</span>`;
     else status = `<span class="tag">לא הוגדר</span>`;
+    if (s.needs_verification) status += ` <span class="tag warn" title="האתר שלח מייל עם קישור אימות לחשבון המשווק">ממתין לאימות במייל</span>`;
     if (!s.auto_login) status += ` <span class="tag warn" title="לאתר עדיין לא הוגדר טופס התחברות אוטומטי">ללא התחברות אוטומטית</span>`;
     return `<tr data-site="${esc(s.id)}">
       <td><b>${esc(s.name)}</b>${s.enabled ? "" : ` <span class="tag">טרם הוגדר לחיפוש</span>`}</td>
@@ -180,6 +181,7 @@ async function loadSuppliers() {
       <td><div class="actions">
         <button class="primary" data-act="save">שמירה</button>
         ${s.saved && s.enabled && s.auto_login ? `<button data-act="test" title="מתחבר לאתר עם הפרטים השמורים">בדיקת התחברות</button>` : ""}
+        ${s.needs_verification ? `<button data-act="verify" title="הדבקת קישור האימות שהאתר שלח במייל">קישור אימות</button>` : ""}
         ${s.saved ? `<button class="danger" data-act="del">מחיקה</button>` : ""}
       </div><div class="msg"></div></td></tr>`;
   }).join("");
@@ -202,7 +204,16 @@ $("#suppliers").addEventListener("click", async (e) => {
     } else if (act === "test") {
       say(msg, "מתחבר לאתר…", true);
       const j = await api(`api/admin/suppliers/${encodeURIComponent(site)}/test`, { method: "POST" });
-      say(msg, j.message, j.ok);
+      await loadSuppliers();  // shows or hides the verification-link button
+      say(document.querySelector(`tr[data-site="${CSS.escape(site)}"] .msg`), j.message, j.ok);
+    } else if (act === "verify") {
+      const link = prompt("הדבק כאן את קישור האימות מהמייל שהאתר שלח:");
+      if (!link || !link.trim()) return;
+      say(msg, "פותח את הקישור ומתחבר…", true);
+      const j = await api(`api/admin/suppliers/${encodeURIComponent(site)}/verify`, { method: "POST",
+        body: JSON.stringify({ link: link.trim() }) });
+      await loadSuppliers();
+      say(document.querySelector(`tr[data-site="${CSS.escape(site)}"] .msg`), j.message, j.ok);
     }
   } catch (ex) {
     say(msg, ex.message, false);

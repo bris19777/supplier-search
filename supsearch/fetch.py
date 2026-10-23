@@ -18,6 +18,7 @@ import asyncio
 import os
 import re
 import ssl
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -57,6 +58,15 @@ class NeedsLogin(Exception):
     def __init__(self, message, content=None):
         super().__init__(message)
         self.content = content
+
+
+class NeedsVerification(NeedsLogin):
+    """The site accepted the form but wants the login confirmed by an emailed link
+    (e.g. Wordfence on WordPress shops when its reCAPTCHA scores the login as automated)."""
+
+
+VERIFY_MESSAGE = ("האתר דורש אימות במייל: נשלח מייל עם קישור אימות לכתובת של חשבון המשווק. "
+                  "העתק את הקישור מהמייל ולחץ 'קישור אימות' בעמוד הניהול")
 
 
 def site_proxy(settings, site):
@@ -109,6 +119,9 @@ class BrowserPool:
         self._locks = {}
         self._interactive = set()
         self._prepared = set()  # sites whose setup_url was visited in the current context
+        # sites waiting for an emailed verification link: every login attempt sends another
+        # email, so searches don't try again until the link is opened or the login is changed
+        self._needs_verify = set()
         self._pdf_browser = None
 
     async def _playwright(self):
@@ -166,7 +179,13 @@ class BrowserPool:
             if check_login and login and login.get("logged_in") and not await page.query_selector(login["logged_in"]):
                 if not credentials or not login.get("username"):
                     raise NeedsLogin("לא מחובר - מחירים מוסתרים. לחץ 'התחברות' או הגדר פרטי כניסה", html)
-                await self._login(page, login, credentials, timeout)
+                if site["id"] in self._needs_verify:
+                    raise NeedsLogin(VERIFY_MESSAGE, html)
+                try:
+                    await self._login(page, login, credentials, timeout)
+                except NeedsVerification:
+                    self._needs_verify.add(site["id"])
+                    raise NeedsLogin(VERIFY_MESSAGE, html)
                 html = await self._load(page, site, url, timeout)
                 if not await page.query_selector(login["logged_in"]):
                     raise NeedsLogin("ההתחברות נכשלה - בדוק את הפרטים או לחץ 'התחברות'", html)
@@ -207,8 +226,13 @@ class BrowserPool:
                 pass
         return await page.content()
 
-    async def _login(self, page, login, credentials, timeout):
-        await page.goto(login["url"], wait_until="domcontentloaded", timeout=timeout * 1000)
+    def needs_verification(self, site_id):
+        return site_id in self._needs_verify
+
+    async def _login(self, page, login, credentials, timeout, url=None):
+        """Fill and send the login form; returns the error the site showed, if any.
+        url: where the form is, when not login.url (an emailed verification link)."""
+        await page.goto(url or login["url"], wait_until="domcontentloaded", timeout=timeout * 1000)
         for selector in (login.get("dismiss"), login.get("open")):
             # a site-wide popup to close, then the button that opens a login dialog
             if selector and await page.query_selector(selector):
@@ -224,6 +248,11 @@ class BrowserPool:
             answer = solve_sum(await page.inner_text(captcha["question"]))
             if answer is not None:
                 await page.fill(captcha["answer"], str(answer))
+        if login.get("remember") and await page.query_selector(login["remember"]):
+            try:
+                await page.check(login["remember"], timeout=5000)  # a long-lived session
+            except Exception:
+                pass
         if login.get("submit") and await page.query_selector(login["submit"]):
             await page.click(login["submit"])
         else:
@@ -232,6 +261,11 @@ class BrowserPool:
             await page.wait_for_load_state("networkidle", timeout=timeout * 1000)
         except Exception:
             pass
+        error = await page.query_selector(login["error"]) if login.get("error") else None
+        error = " ".join((await error.inner_text()).split()) if error else ""
+        if error and login.get("verify_re") and re.search(login["verify_re"], error, re.I):
+            raise NeedsVerification(VERIFY_MESSAGE)
+        return error
 
     async def reset(self, site_id):
         """Forget a site's session (after its saved login changed), so the next search
@@ -245,6 +279,7 @@ class BrowserPool:
                 finally:
                     await ctx.close()
             self._prepared.discard(site_id)
+            self._needs_verify.discard(site_id)
 
     async def check_login(self, site, credentials, search_url, timeout):
         """Log in with fresh cookies and report (ok, message) for the admin page."""
@@ -255,14 +290,47 @@ class BrowserPool:
         ctx = await self.context(site["id"], site_proxy(self.settings, site))
         page = await ctx.new_page()
         try:
-            await self._login(page, login, credentials, timeout)
-            if not login.get("logged_in"):
-                return True, "פרטי הכניסה נשלחו (לאתר אין דרך לאמת שההתחברות הצליחה)"
-            await self._load(page, site, search_url, timeout)
-            if await page.query_selector(login["logged_in"]):
-                return True, "ההתחברות הצליחה"
-            return False, ("לא זוהתה התחברות - בדוק שם משתמש וסיסמה "
-                           "(או שהאתר דורש קוד/captcha)")
+            error = await self._login(page, login, credentials, timeout)
+            return await self._logged_in(page, site, search_url, timeout, error)
+        except NeedsVerification as e:
+            self._needs_verify.add(site["id"])
+            return False, str(e)
+        except Exception as e:
+            return False, f"שגיאה בהתחברות: {type(e).__name__}: {e}"[:300]
+        finally:
+            await page.close()
+
+    async def _logged_in(self, page, site, search_url, timeout, error=""):
+        login = site["login"]
+        if not login.get("logged_in"):
+            return True, "פרטי הכניסה נשלחו (לאתר אין דרך לאמת שההתחברות הצליחה)"
+        await self._load(page, site, search_url, timeout)
+        if await page.query_selector(login["logged_in"]):
+            self._needs_verify.discard(site["id"])
+            return True, "ההתחברות הצליחה"
+        if error:
+            return False, f"האתר דחה את ההתחברות: {error}"[:300]
+        return False, ("לא זוהתה התחברות - בדוק שם משתמש וסיסמה "
+                       "(או שהאתר דורש קוד/captcha)")
+
+    async def verify_link(self, site, credentials, link, search_url, timeout):
+        """Open the verification link the site emailed and log in from it: the link puts a
+        one-time token into the login form, so the same details now go through."""
+        await self.reset(site["id"])
+        ctx = await self.context(site["id"], site_proxy(self.settings, site))
+        page = await ctx.new_page()
+        try:
+            login, url = site["login"], link
+            await page.goto(link, wait_until="domcontentloaded", timeout=timeout * 1000)
+            if not await page.query_selector(login["username"]) and urlsplit(link).query:
+                # the link leads to another login page (e.g. wp-login.php): carry its token
+                # over to the form this site is set up for
+                url = login["url"].split("?")[0] + "?" + urlsplit(link).query
+            error = await self._login(page, login, credentials, timeout, url=url)
+            return await self._logged_in(page, site, search_url, timeout, error)
+        except NeedsVerification:
+            self._needs_verify.add(site["id"])
+            return False, "הקישור לא התקבל (אולי פג תוקפו או שכבר נוצל). לחץ 'בדיקת התחברות' לקבלת מייל חדש"
         except Exception as e:
             return False, f"שגיאה בהתחברות: {type(e).__name__}: {e}"[:300]
         finally:
