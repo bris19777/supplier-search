@@ -195,7 +195,7 @@ def test_saved_supplier_login_used_by_search(tmp_path, monkeypatch, server):  # 
         # the right one: the check passes and every user's search gets dealer prices
         c.put("/api/admin/suppliers/b", json={"username": "dealer", "password": "s3cret"})
         r = c.post("/api/admin/suppliers/b/test").json()
-        assert r == {"ok": True, "message": "ההתחברות הצליחה"}
+        assert r == {"ok": True, "message": "ההתחברות הצליחה", "verify": False}
         c.post("/api/admin/users", json={"username": "dana", "password": "dana-pass"})
         c.post("/api/logout")
         login(c, "dana", "dana-pass")
